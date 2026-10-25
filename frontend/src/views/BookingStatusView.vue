@@ -1,7 +1,7 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
-import { contractPdfUrl, getBooking, getContract, getMyDocuments, getTracking, myDocumentPdfUrl, startCheckout, verifyPayment } from '@/api/bookings'
+import { contractPdfUrl, getBooking, getContract, getMyDocuments, getTracking, myDocumentPdfUrl, startBalanceCheckout, startCheckout, verifyPayment } from '@/api/bookings'
 import { money } from '@/utils/format'
 import { useI18n } from '@/i18n'
 import Icon from '@/components/ui/Icon.vue'
@@ -114,6 +114,22 @@ async function payByCard() {
   } catch (err) {
     cardError.value = errorText(err)
     cardBusy.value = false
+  }
+}
+// After confirmation: the rent balance + deposit can be paid ahead on Stripe ("next" step, green).
+const balanceBusy = ref(false)
+const balanceError = ref('')
+const canPayBalance = computed(() => Boolean(b.value?.balance?.payOnline && b.value.balance.dueMinor > 0))
+const balancePaid = computed(() => b.value?.balance?.payment?.status === 'SUCCEEDED' && !b.value.balance.dueMinor)
+async function payBalance() {
+  balanceBusy.value = true
+  balanceError.value = ''
+  try {
+    const { url } = await startBalanceCheckout(b.value.number, locale.value)
+    window.location.assign(url)
+  } catch (err) {
+    balanceError.value = errorText(err)
+    balanceBusy.value = false
   }
 }
 const canResume = computed(() => b.value?.status === 'PENDING' && (!review.value || ['DRAFT', 'CHANGES_REQUESTED'].includes(review.value)))
@@ -309,6 +325,15 @@ async function copySummary() {
             <Icon name="check" :size="14" /> {{ t('st.paidAt', { time: fmt(b.payment.succeededAt) }) }}<template v-if="b.payment.methodType === 'promptpay'"> · {{ t('st.viaPromptpay') }}</template><template v-else-if="b.payment.last4"> · {{ t('st.card', { n: b.payment.last4 }) }}</template>
           </p>
           <p v-else-if="slipInReview" class="review"><Icon name="clock" :size="14" /> {{ t('st.slipAt', { time: fmt(b.slip.createdAt) }) }}</p>
+          <p v-if="balancePaid" class="paid"><Icon name="check" :size="14" /> {{ t('st.balancePaid', { time: fmt(b.balance.payment.succeededAt) }) }}</p>
+          <div v-else-if="canPayBalance" class="balance">
+            <button type="button" class="next" :disabled="balanceBusy" @click="payBalance">
+              <span v-if="balanceBusy" class="spinner" />
+              <template v-else>{{ t('st.payBalance', { amount: money(b.balance.dueMinor, b.money.currency) }) }} <Icon name="chevron-right" :size="16" /></template>
+            </button>
+            <small>{{ t('st.payBalanceHint') }}</small>
+            <p v-if="balanceError" class="err" role="alert">{{ balanceError }}</p>
+          </div>
         </section>
       </div>
 
@@ -652,6 +677,57 @@ td {
   align-items: center;
   gap: 6px;
   color: #b7791f;
+  font-size: var(--fs-xs);
+}
+.balance {
+  display: grid;
+  gap: 6px;
+  margin-top: 14px;
+}
+.balance .next {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  min-height: 48px;
+  padding: 12px 18px;
+  border: 0;
+  border-radius: 999px;
+  background: #1f9d55;
+  color: #fff;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: 0 6px 18px rgba(31, 157, 85, 0.28);
+}
+.balance .next:hover {
+  background: #188a49;
+}
+.balance .next:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.balance .spinner {
+  width: 18px;
+  height: 18px;
+  border: 2px solid rgba(255, 255, 255, 0.45);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.balance small {
+  color: #6b6e7a;
+  font-size: var(--fs-xs);
+  text-align: center;
+}
+.balance .err {
+  color: #c0392b;
   font-size: var(--fs-xs);
 }
 .paid {

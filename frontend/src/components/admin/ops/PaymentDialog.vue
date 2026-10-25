@@ -1,14 +1,16 @@
 <script setup>
-import { computed, onMounted, ref } from 'vue'
-import { collectPayment, getLedger, returnDeposit } from '@/api/admin'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { balanceLink, collectPayment, getLedger, returnDeposit } from '@/api/admin'
 import { money } from '@/utils/format'
 import OpsDialog from './OpsDialog.vue'
 
 // "ชำระเงิน" and "รายได้" on the operations board.
 //   collect  → rent balance + security deposit received at hand-over
 //   ledger   → every payment on this booking, and the deposit going back
+//   qr       → collect, starting straight away with the Stripe QR / link for the customer's phone
 //   (the deposit is returned here too, minus deductions with a reason)
 const props = defineProps({ booking: { type: Object, required: true }, mode: { type: String, default: 'collect' } })
+const collecting = computed(() => props.mode === 'collect' || props.mode === 'qr')
 const emit = defineEmits(['close', 'saved'])
 
 const l = ref(null)
@@ -30,7 +32,49 @@ async function load() {
   deposit.value = l.value.depositCollected ? 0 : l.value.depositMinor / 100
   refund.value = l.value.depositHeldMinor / 100
 }
-onMounted(() => load().catch((err) => (error.value = err.message)))
+onMounted(async () => {
+  try {
+    await load()
+    if (props.mode === 'qr' && !collected.value) await makeLink()
+  } catch (err) {
+    error.value = err.message
+  }
+})
+
+// Card / PromptPay on the customer's own phone: a Stripe checkout for the rent balance + deposit.
+// Once paid (webhook), the ledger shows it and the counter form goes away.
+const link = ref(null)
+const copied = ref(false)
+let poll
+async function makeLink() {
+  busy.value = true
+  error.value = ''
+  try {
+    link.value = await balanceLink(props.booking.number)
+    clearInterval(poll)
+    poll = setInterval(async () => {
+      l.value = await getLedger(props.booking.id).catch(() => l.value)
+      if (collected.value) {
+        clearInterval(poll)
+        emit('saved', l.value)
+      }
+    }, 4000)
+  } catch (err) {
+    error.value = err.message
+  } finally {
+    busy.value = false
+  }
+}
+async function copyLink() {
+  try {
+    await navigator.clipboard.writeText(link.value.url)
+    copied.value = true
+    setTimeout(() => (copied.value = false), 1500)
+  } catch {
+    /* the link is shown, it can be copied by hand */
+  }
+}
+onBeforeUnmount(() => clearInterval(poll))
 
 const collected = computed(() => l.value && (l.value.paidCounterMinor > 0 || l.value.depositCollected))
 const deduction = computed(() => (l.value ? l.value.depositHeldMinor / 100 - Number(refund.value || 0) : 0))
@@ -59,14 +103,32 @@ const giveBack = () =>
     <template v-if="l">
       <dl class="sum">
         <div><dt>ค่าเช่า + ค่าส่ง</dt><dd>{{ money(l.totalMinor, c) }}</dd></div>
-        <div><dt>จ่ายออนไลน์ (ค่าจอง)</dt><dd class="paid">−{{ money(l.paidOnlineMinor, c) }}</dd></div>
+        <div><dt>จ่ายออนไลน์</dt><dd class="paid">−{{ money(l.paidOnlineMinor, c) }}</dd></div>
         <div v-if="l.paidCounterMinor"><dt>รับที่หน้าร้าน</dt><dd class="paid">−{{ money(l.paidCounterMinor, c) }}</dd></div>
         <div class="due"><dt>ค่าเช่าคงเหลือ</dt><dd>{{ money(l.rentDueMinor, c) }}</dd></div>
         <div><dt>เงินมัดจำ</dt><dd>{{ money(l.depositMinor, c) }} <small v-if="l.depositCollected">รับแล้ว</small></dd></div>
       </dl>
 
+      <!-- the customer pays on their phone (Stripe: card / PromptPay) -->
+      <div v-if="collecting && !collected" class="stripe">
+        <template v-if="link">
+          <img :src="link.qr" alt="QR ชำระเงิน" width="220" height="220" />
+          <p class="amt">ให้ลูกค้าสแกนเพื่อชำระ <b>{{ money(link.amountMinor, link.currency) }}</b></p>
+          <div class="link-row">
+            <input :value="link.url" readonly aria-label="ลิงก์ชำระเงิน" @focus="$event.target.select()" />
+            <button type="button" @click="copyLink">{{ copied ? 'คัดลอกแล้ว' : 'คัดลอกลิงก์' }}</button>
+          </div>
+          <small>ส่งลิงก์ทาง LINE ได้ · ใช้ได้ถึง {{ time(link.expiresAt) }} · ระบบตัดยอดเองเมื่อลูกค้าจ่ายสำเร็จ</small>
+          <p class="wait"><span class="dot" /> รอลูกค้าชำระ…</p>
+        </template>
+        <button v-else type="button" class="stripe-btn" :disabled="busy" @click="makeLink">
+          QR / ลิงก์ชำระผ่าน Stripe (บัตร · พร้อมเพย์) {{ money(l.rentDueMinor + (l.depositCollected ? 0 : l.depositMinor), c) }}
+        </button>
+      </div>
+      <p v-if="collecting && !collected" class="or">หรือบันทึกรับเงินสด / โอนเอง</p>
+
       <!-- collect at hand-over -->
-      <form v-if="mode === 'collect' && !collected" class="grid" @submit.prevent="collect">
+      <form v-if="collecting && !collected" class="grid" @submit.prevent="collect">
         <div class="seg" role="radiogroup" aria-label="วิธีรับเงิน">
           <button v-for="(t, k) in METHOD" :key="k" type="button" :class="{ on: method === k }" @click="method = k">{{ t }}</button>
         </div>
@@ -138,6 +200,91 @@ const giveBack = () =>
 .grid {
   display: grid;
   gap: 12px;
+}
+.stripe {
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+  padding: 14px;
+  border: 1px solid #d6e9dd;
+  border-radius: 14px;
+  background: #f4fbf6;
+  text-align: center;
+}
+.stripe img {
+  border-radius: 10px;
+  background: #fff;
+}
+.stripe .amt {
+  font-size: 0.95rem;
+}
+.stripe small {
+  color: #6b6e7a;
+  font-size: 0.75rem;
+}
+.stripe-btn {
+  width: 100%;
+  padding: 12px 14px;
+  border: 0;
+  border-radius: 12px;
+  background: #1f9d55;
+  color: #fff;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+.stripe-btn:disabled {
+  opacity: 0.6;
+}
+.link-row {
+  display: flex;
+  gap: 6px;
+  width: 100%;
+}
+.link-row input {
+  flex: 1;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid #d9dbe1;
+  border-radius: 10px;
+  font-size: 0.78rem;
+}
+.link-row button {
+  padding: 8px 12px;
+  border: 1px solid #1f9d55;
+  border-radius: 10px;
+  background: #fff;
+  color: #1f9d55;
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.wait {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #1f8a56;
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #1f9d55;
+  animation: pulse 1.2s ease-in-out infinite;
+}
+@keyframes pulse {
+  50% {
+    opacity: 0.3;
+  }
+}
+.or {
+  color: #6b6e7a;
+  font-size: 0.8rem;
+  text-align: center;
 }
 .two {
   display: grid;

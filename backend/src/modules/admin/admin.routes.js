@@ -1,5 +1,6 @@
 import express, { Router } from "express";
 import { createHash } from "node:crypto";
+import QRCode from "qrcode";
 import { z } from "zod";
 import { requireAnyPermission, requirePermission } from "../../middleware/auth.js";
 import { validate } from "../../middleware/validate.js";
@@ -221,6 +222,16 @@ export function adminRoutes() {
     validate({ params: numberParam, body: offlineConfirmSchema }),
     async (req, res) => {
       res.json({ data: await bookings.confirmOffline(req.auth, req.valid.params.number, req.valid.body, auditContext(req)) });
+    },
+  );
+  // At hand-over: a Stripe link (and its QR) the customer pays the rent balance + deposit with on their phone.
+  router.post(
+    "/bookings/:number/balance-link",
+    requirePermission(P.BOOKINGS_WRITE, P.PAYMENTS_READ),
+    validate({ params: numberParam }),
+    async (req, res) => {
+      const link = await bookings.startBalanceCheckout(req.auth, req.valid.params.number, { locale: "th", byStaff: true }, auditContext(req));
+      res.json({ data: { ...link, qr: await QRCode.toDataURL(link.url, { margin: 1, width: 320 }) } });
     },
   );
 

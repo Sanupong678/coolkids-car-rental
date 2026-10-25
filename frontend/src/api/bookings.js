@@ -10,6 +10,7 @@ export const createBooking = (body) => post('/bookings', body).then((r) => r.dat
 export const getContract = (number) => api(`/bookings/${number}/contract`).then((r) => r.data)
 export const signContract = (number, signature) => post(`/bookings/${number}/contract/sign`, { accepted: true, signature }).then((r) => r.data)
 export const startCheckout = (number, locale) => post(`/bookings/${number}/checkout`, { locale }).then((r) => r.data)
+export const startBalanceCheckout = (number, locale) => post(`/bookings/${number}/balance/checkout`, { locale }).then((r) => r.data)
 export const verifyPayment = (number, sessionId) => post(`/bookings/${number}/payment/verify`, { sessionId }).then((r) => r.data)
 export const submitForReview = (number) => post(`/bookings/${number}/submit`, {}).then((r) => r.data)
 // Booking slip and receipts of the customer's own booking (PDF).

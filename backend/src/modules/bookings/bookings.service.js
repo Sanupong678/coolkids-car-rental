@@ -316,7 +316,15 @@ export const BOOKING_SELECT = `
          ct.id AS contract_id, ct.contract_number, ct.status AS contract_status, ct.signed_at AS contract_signed_at,
          (SELECT json_build_object('status', p.status, 'provider', p.provider, 'methodType', p.payment_method_type,
                                    'last4', p.payment_method_last4, 'succeededAt', p.succeeded_at, 'amountMinor', p.amount_minor)
-            FROM payments p WHERE p.booking_id = b.id ORDER BY (p.status = 'SUCCEEDED') DESC, p.created_at DESC LIMIT 1) AS payment,
+            FROM payments p WHERE p.booking_id = b.id AND NOT p.is_balance AND p.parent_payment_id IS NULL
+            ORDER BY (p.status = 'SUCCEEDED') DESC, p.created_at DESC LIMIT 1) AS payment,
+         -- what is still owed after confirmation: rent paid so far, deposit taken, the latest online balance payment
+         (SELECT COALESCE(sum(p.amount_minor), 0) FROM payments p
+           WHERE p.booking_id = b.id AND p.purpose = 'RENTAL' AND p.status IN ('SUCCEEDED','PARTIALLY_REFUNDED','REFUNDED')) AS rent_paid_minor,
+         EXISTS (SELECT 1 FROM payments p WHERE p.booking_id = b.id AND p.purpose = 'DEPOSIT'
+                  AND p.status IN ('SUCCEEDED','PARTIALLY_REFUNDED','REFUNDED')) AS deposit_paid,
+         (SELECT json_build_object('status', p.status, 'succeededAt', p.succeeded_at, 'methodType', p.payment_method_type)
+            FROM payments p WHERE p.booking_id = b.id AND p.is_balance ORDER BY (p.status = 'SUCCEEDED') DESC, p.created_at DESC LIMIT 1) AS balance_payment,
          (SELECT json_build_object('status', s.status, 'rejectReason', s.reject_reason, 'amountMinor', s.amount_minor,
                                    'transferredAt', s.transferred_at, 'createdAt', s.created_at)
             FROM payment_slips s WHERE s.booking_id = b.id ORDER BY s.created_at DESC LIMIT 1) AS slip,
@@ -339,6 +347,17 @@ export const navigationUrl = (from, to) =>
   to?.lat != null
     ? `https://www.google.com/maps/dir/?api=1&origin=${from.lat},${from.lng}&destination=${to.lat},${to.lng}&travelmode=driving`
     : to?.address ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(to.address)}` : null;
+
+/** Still owed on a booking: rent (total − rent paid) and the deposit unless taken already. */
+function balanceDue(r) {
+  // Unpaid booking: the reservation fee is what the customer pays first, the rest at pick-up.
+  const rentPaid = r.status === "PENDING" ? dueNow(r) : Number(r.rent_paid_minor ?? (r.payment?.status === "SUCCEEDED" ? r.payment.amountMinor : 0));
+  return {
+    rent: Math.max(0, Number(r.total_minor) - rentPaid),
+    deposit: r.deposit_paid ? 0 : Number(r.deposit_minor),
+  };
+}
+const BALANCE_STATUSES = ["CONFIRMED", "PREPARING", "READY", "IN_DELIVERY", "ACTIVE"];
 
 export function bookingDto(r) {
   return {
@@ -378,9 +397,19 @@ export function bookingDto(r) {
       currency: r.currency, subtotalMinor: r.subtotal_minor, discountMinor: r.discount_minor, taxMinor: r.tax_minor,
       totalMinor: r.total_minor, depositMinor: r.deposit_minor, items: r.items ?? [],
       dueNowMinor: dueNow(r),
-      // Balance at pick-up: rental + delivery + security deposit − what was paid online.
-      payAtPickupMinor: Number(r.total_minor) + Number(r.deposit_minor) - (r.payment?.status === "SUCCEEDED" ? Number(r.payment.amountMinor) : dueNow(r)),
+      // Balance at pick-up: rental + delivery + security deposit − what was paid so far (or, unpaid, the fee due now).
+      payAtPickupMinor: balanceDue(r).rent + balanceDue(r).deposit,
     },
+    // After confirmation the customer may settle the rent balance + deposit online (Stripe) instead of at pick-up.
+    balance: BALANCE_STATUSES.includes(r.status)
+      ? {
+          rentDueMinor: balanceDue(r).rent,
+          depositDueMinor: balanceDue(r).deposit,
+          dueMinor: balanceDue(r).rent + balanceDue(r).deposit,
+          payOnline: config.paymentProvider === "stripe" ? config.cardPaymentsEnabled : config.devToolsEnabled,
+          payment: r.balance_payment ?? null,
+        }
+      : null,
     review: r.review_status
       ? { status: r.review_status, note: r.review_note, submittedAt: r.submitted_at, approvedAt: r.approved_at }
       : null,
@@ -754,11 +783,14 @@ export async function confirmPaymentTx(
   const p = rows[0];
   if (!p) throw NotFound("Payment");
   if (p.status === "SUCCEEDED") return { alreadyConfirmed: true };
+  // A balance checkout charges its linked rows (the deposit) in the same session.
+  const { rows: linked } = await db.query("SELECT * FROM payments WHERE parent_payment_id = $1 FOR UPDATE", [p.id]);
+  const chargedMinor = Number(p.amount_minor) + linked.reduce((t, x) => t + Number(x.amount_minor), 0);
   // The gateway's own record must match ours: same checkout session, full amount, same currency.
   // Anything else (tampered metadata, partial / wrong-currency payment) is never auto-confirmed.
   if (
     (providerPaymentId !== undefined && providerPaymentId !== p.provider_payment_id) ||
-    (amountMinor !== undefined && Number(amountMinor) !== Number(p.amount_minor)) ||
+    (amountMinor !== undefined && Number(amountMinor) !== chargedMinor) ||
     (currency !== undefined && String(currency).toUpperCase() !== p.currency)
   ) {
     await emit(db, p.booking_id, "payment.mismatch", { paymentId: p.id, providerPaymentId, amountMinor, currency });
@@ -774,9 +806,27 @@ export async function confirmPaymentTx(
      VALUES ($1, 'CAPTURE', 'SUCCEEDED', $2, $3, $4, $5, $6)`,
     [p.id, p.amount_minor, p.currency, p.provider_payment_id, JSON.stringify(raw), webhookEventId],
   );
+  for (const x of linked) {
+    await db.query(
+      "UPDATE payments SET status = 'SUCCEEDED', succeeded_at = now(), payment_method_type = $2, payment_method_last4 = $3 WHERE id = $1",
+      [x.id, methodType, cardLast4],
+    );
+    await db.query(
+      `INSERT INTO payment_transactions (payment_id, transaction_type, status, amount_minor, currency, provider_transaction_id, provider_response)
+       VALUES ($1, 'CAPTURE', 'SUCCEEDED', $2, $3, $4, $5)`,
+      [x.id, x.amount_minor, x.currency, p.provider_payment_id, JSON.stringify({ paidWith: p.id })],
+    );
+  }
   const { rows: bRows } = await db.query("SELECT id, status, user_id, booking_number FROM bookings WHERE id = $1 FOR UPDATE", [p.booking_id]);
   const b = bRows[0];
-  if (b.status === "PENDING") {
+  if (p.is_balance) {
+    await emit(db, b.id, "payment.balance_paid", { bookingNumber: b.booking_number, paymentId: p.id, amountMinor: chargedMinor });
+    await notify(db, b.user_id, {
+      type: "PAYMENT_RECEIVED", bookingId: b.id,
+      title: "รับชำระค่าเช่าและเงินประกันแล้ว",
+      body: `เลขที่การจอง ${b.booking_number}\nยอดที่ชำระ ${(chargedMinor / 100).toLocaleString("th-TH")} บาท\nวันรับรถไม่ต้องชำระเพิ่ม (เงินประกันคืนภายใน 24 ชม. หลังคืนรถ)`,
+    });
+  } else if (b.status === "PENDING") {
     await confirmBookingTx(db, b, p.id);
   } else {
     // Paid after the hold lapsed: money is in, car may be gone → staff must refund or rebook.
@@ -866,6 +916,89 @@ export async function confirmOffline(staff, number, { paidMinor, method, note },
     { actorId: staff.user.id },
   );
   return getBooking(staff, number);
+}
+
+// ---------------------------------------------------------------- balance (rent + deposit) online
+
+/**
+ * Stripe checkout for what is still owed after confirmation: the rent balance and the
+ * security deposit. Started by the customer ("ชำระค่าเช่าและเงินประกัน") or by staff at
+ * hand-over (QR / link for the customer's phone). One session; the deposit is a linked row.
+ */
+export async function startBalanceCheckout(auth, number, { locale, byStaff = false }, ctx) {
+  if (!config.cardPaymentsEnabled) throw new AppError(503, "CARD_PAYMENTS_DISABLED", "ชำระด้วยบัตรยังไม่เปิดให้บริการ");
+  const provider = paymentProvider();
+  const prepared = await withTransaction(
+    async (db) => {
+      const b = await loadBooking(db, number, auth, { lock: true });
+      if (!byStaff && b.user_id !== auth.user.id) throw Forbidden();
+      if (!BALANCE_STATUSES.includes(b.status)) throw Conflict("NOT_CONFIRMED", "ชำระส่วนที่เหลือได้หลังยืนยันการจองแล้วเท่านั้น");
+      const due = balanceDue(b);
+      if (due.rent + due.deposit <= 0) throw Conflict("NOTHING_DUE", "การจองนี้ชำระครบแล้ว");
+      // Only one live balance checkout: older open ones are closed so the customer cannot pay twice.
+      const { rows: open } = await db.query(
+        `UPDATE payments SET status = 'CANCELLED' WHERE booking_id = $1 AND status IN ('INITIATED','REQUIRES_ACTION')
+            AND (is_balance OR parent_payment_id IS NOT NULL) RETURNING provider_payment_id, is_balance`,
+        [b.id],
+      );
+      const leadPurpose = due.rent > 0 ? "RENTAL" : "DEPOSIT";
+      const { rows } = await db.query(
+        `INSERT INTO payments (booking_id, user_id, purpose, provider, amount_minor, currency, idempotency_key, is_balance)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, true) RETURNING *`,
+        [b.id, b.user_id, leadPurpose, provider.name, due.rent > 0 ? due.rent : due.deposit, b.currency, randomUUID()],
+      );
+      const lead = rows[0];
+      let child = null;
+      if (due.rent > 0 && due.deposit > 0) {
+        const { rows: c } = await db.query(
+          `INSERT INTO payments (booking_id, user_id, purpose, provider, amount_minor, currency, idempotency_key, parent_payment_id)
+           VALUES ($1, $2, 'DEPOSIT', $3, $4, $5, $6, $7) RETURNING *`,
+          [b.id, b.user_id, provider.name, due.deposit, b.currency, randomUUID(), lead.id],
+        );
+        child = c[0];
+      }
+      const stale = open.filter((o) => o.is_balance && o.provider_payment_id).map((o) => o.provider_payment_id);
+      return { booking: b, lead, child, due, stale };
+    },
+    { actorId: auth.user.id },
+  );
+
+  const { booking: b, lead, child, due } = prepared;
+  for (const id of prepared.stale) await provider.expire?.(id).catch(() => {});
+  const totalMinor = due.rent + due.deposit;
+  const base = `${config.FRONTEND_URL}/bookings/${b.booking_number}`;
+  const lines = [
+    ...(due.rent ? [{ name: `ค่าเช่า ${b.brand} ${b.model} · ${b.rental_days} วัน`, amountMinor: due.rent }] : []),
+    ...(due.deposit ? [{ name: "เงินประกัน (คืนภายใน 24 ชม. หลังคืนรถ)", amountMinor: due.deposit }] : []),
+  ];
+  const expiresAt = new Date(Date.now() + 23 * HOUR);
+  const checkout = await provider.createCheckout({
+    payment: { ...lead, amount_minor: totalMinor },
+    booking: { ...b, description: `${b.brand} ${b.model} · ค่าเช่าและเงินประกัน` },
+    lines,
+    customerEmail: b.contact_email ?? undefined,
+    successUrl: `${base}?paid=balance`,
+    cancelUrl: base,
+    expiresAt,
+    locale,
+  });
+
+  await withTransaction(async (db) => {
+    await db.query("UPDATE payments SET provider_payment_id = $2, status = 'REQUIRES_ACTION' WHERE id = $1", [lead.id, checkout.providerPaymentId]);
+    if (child) {
+      await db.query("UPDATE payments SET provider_payment_id = $2, status = 'REQUIRES_ACTION' WHERE id = $1", [child.id, `${checkout.providerPaymentId}#deposit`]);
+    }
+    await db.query(
+      `INSERT INTO payment_transactions (payment_id, transaction_type, status, amount_minor, currency, provider_transaction_id)
+       VALUES ($1, 'INITIALIZE', 'PENDING', $2, $3, $4)`,
+      [lead.id, totalMinor, b.currency, checkout.providerPaymentId],
+    );
+    await recordAudit(db, ctx, {
+      action: "payment.balance_initiated", entityType: "payment", entityId: lead.id,
+      after: { provider: provider.name, rent: due.rent, deposit: due.deposit, byStaff },
+    });
+  });
+  return { url: checkout.url, provider: provider.name, amountMinor: totalMinor, currency: b.currency, expiresAt };
 }
 
 export async function failPayment(paymentId, reason) {

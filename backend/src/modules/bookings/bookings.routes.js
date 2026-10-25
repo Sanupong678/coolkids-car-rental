@@ -141,6 +141,17 @@ export function bookingRoutes() {
     },
   );
 
+  // After confirmation: the rent balance + security deposit by card / PromptPay (Stripe).
+  router.post(
+    "/bookings/:number/balance/checkout",
+    requireAuth,
+    paymentLimiter,
+    validate({ params: schemas.numberParam, body: schemas.checkoutSchema }),
+    async (req, res) => {
+      res.json({ data: await service.startBalanceCheckout(req.auth, req.valid.params.number, req.valid.body, auditContext(req)) });
+    },
+  );
+
   router.post(
     "/bookings/:number/payment/verify",
     requireAuth,

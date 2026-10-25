@@ -157,11 +157,13 @@ const clock = (iso) => new Date(iso).toLocaleTimeString('th-TH', { timeZone: tz,
           </div>
           <div class="c-place">
             <span><small>ส่งรถ:</small> <Icon name="pin" :size="13" /> {{ b.fulfillment === 'DELIVERY' ? b.delivery?.address : 'รับด้วยตนเอง' }}</span>
-            <span><small>คืน:</small> <Icon name="pin" :size="13" /> {{ b.fulfillment === 'DELIVERY' ? 'รับคืนที่จุดส่ง' : 'ส่งด้วยตนเอง' }}</span>
+            <span><small>คืน:</small> <Icon name="pin" :size="13" /> {{ b.returnPlace?.type === 'ADDRESS' ? b.returnPlace.address : b.returnPlace?.type === 'SAME_AS_DELIVERY' ? 'รับคืนที่จุดส่ง' : 'คืนที่สาขา' }}</span>
+            <a v-if="b.returnPlace?.type === 'ADDRESS' && b.returnPlace.mapsUrl" :href="b.returnPlace.mapsUrl" target="_blank" rel="noopener" class="nav">นำทางจุดคืน</a>
             <a v-if="b.delivery?.mapsUrl" :href="b.delivery.mapsUrl" target="_blank" rel="noopener" class="nav">นำทาง</a>
           </div>
           <div class="c-upd">
             <button type="button" :disabled="b.status === 'PENDING'" @click="open('pay', b)"><Icon name="receipt" :size="14" /> ชำระเงิน</button>
+            <button v-if="b.status !== 'PENDING' && b.ops?.dueMinor > 0" type="button" class="qr-pay" @click="open('qr', b)"><Icon name="receipt" :size="14" /> QR ชำระเงิน</button>
             <button type="button" :disabled="b.status === 'PENDING'" @click="open('ledger', b)"><Icon name="chart" :size="14" /> รายได้</button>
             <button type="button" :disabled="b.status === 'PENDING'" @click="open('mileage', b)"><Icon name="gauge" :size="14" /> ไมล์</button>
             <button v-if="b.contract" type="button" @click="open('contract', b)"><Icon name="printer" :size="14" /> เอกสาร</button>
@@ -210,7 +212,7 @@ const clock = (iso) => new Date(iso).toLocaleTimeString('th-TH', { timeZone: tz,
     </ul>
     <p v-else-if="data" class="none">ไม่มีรายการ</p>
 
-    <PaymentDialog v-if="tool?.kind === 'pay' || tool?.kind === 'ledger'" :booking="tool.booking" :mode="tool.kind === 'pay' ? 'collect' : 'ledger'" @close="onToolClose" />
+    <PaymentDialog v-if="['pay', 'qr', 'ledger'].includes(tool?.kind)" :booking="tool.booking" :mode="{ pay: 'collect', qr: 'qr', ledger: 'ledger' }[tool.kind]" @close="onToolClose" />
     <MileageDialog v-if="tool?.kind === 'mileage'" :booking="tool.booking" @close="onToolClose" />
     <DocumentsDialog v-if="tool?.kind === 'contract'" :booking="tool.booking" @close="onToolClose" />
     <div v-else-if="!error" class="skeleton" style="height: 240px" />
@@ -578,5 +580,10 @@ const clock = (iso) => new Date(iso).toLocaleTimeString('th-TH', { timeZone: tz,
   color: var(--bad);
 }
 @media (max-width: 760px) {
+}
+.c-upd .qr-pay {
+  border-color: #1f9d55;
+  background: #1f9d55;
+  color: #fff;
 }
 </style>

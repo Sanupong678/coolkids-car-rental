@@ -51,6 +51,60 @@ async function load(slug) {
 watch(() => route.params.slug, (s) => s && load(s), { immediate: true })
 
 const hero = computed(() => v.value?.images?.[0])
+
+// Car photos differ: some are square cut-outs with lots of empty space, some fill the frame.
+// On load, find where the car actually is (non-transparent pixels) and crop to it, so every
+// car fills the stage the same way and none runs past the card. Photos without transparency
+// (or not readable) are shown whole.
+const fit = ref(null)
+watch(hero, () => (fit.value = null))
+function measureCar(e) {
+  const img = e.target
+  try {
+    const W = 160
+    const H = Math.max(1, Math.round((W * img.naturalHeight) / img.naturalWidth))
+    const c = document.createElement('canvas')
+    c.width = W
+    c.height = H
+    const ctx = c.getContext('2d', { willReadFrequently: true })
+    ctx.drawImage(img, 0, 0, W, H)
+    const d = ctx.getImageData(0, 0, W, H).data
+    let x0 = W, y0 = H, x1 = -1, y1 = -1
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        if (d[(y * W + x) * 4 + 3] > 24) {
+          if (x < x0) x0 = x
+          if (x > x1) x1 = x
+          if (y < y0) y0 = y
+          if (y > y1) y1 = y
+        }
+      }
+    }
+    if (x1 < 0) return
+    // a little room for the shadow
+    const pad = 0.02
+    const l = Math.max(0, x0 / W - pad), r = Math.min(1, (x1 + 1) / W + pad)
+    const t = Math.max(0, y0 / H - pad), b = Math.min(1, (y1 + 1) / H + pad)
+    if (r - l > 0.97 && b - t > 0.97) return // fills the photo already: nothing to crop
+    fit.value = { l, t, w: r - l, h: b - t, ratio: ((r - l) * img.naturalWidth) / ((b - t) * img.naturalHeight) }
+  } catch {
+    /* cross-origin or decode issue: keep the whole photo */
+  }
+}
+const frameStyle = computed(() => (fit.value ? { aspectRatio: String(fit.value.ratio), '--r': fit.value.ratio } : null))
+const cropStyle = computed(() =>
+  fit.value
+    ? {
+        position: 'absolute',
+        width: `${100 / fit.value.w}%`,
+        height: `${100 / fit.value.h}%`,
+        left: `${(-fit.value.l / fit.value.w) * 100}%`,
+        top: `${(-fit.value.t / fit.value.h) * 100}%`,
+        maxWidth: 'none',
+        maxHeight: 'none',
+      }
+    : null,
+)
 const daily = computed(() => v.value?.price.discountedDailyMinor ?? v.value?.price.dailyMinor)
 const line = computed(() => site.content?.contact?.line)
 const thumbs = computed(() => others.value.slice(0, 3))
@@ -392,15 +446,19 @@ watch(
               <span>{{ t('car.deliverTo') }}<br /><b>{{ v.delivery?.freeKm ? t('car.freeKm', { km: v.delivery.freeKm }) : t('car.allBangkok') }}</b></span>
             </div>
             <figure :key="hero?.url" class="car">
-              <img
-                v-if="hero"
-                :src="imgSrc(hero)"
-                :srcset="srcset(hero.variants)"
-                sizes="(min-width: 1100px) 640px, 90vw"
-                :alt="hero.alt ?? `${v.brand} ${v.model}`"
-                fetchpriority="high"
-              />
-              <span class="ring" aria-hidden="true" />
+              <div class="frame" :class="{ fitted: fit }" :style="frameStyle">
+                <img
+                  v-if="hero"
+                  :src="imgSrc(hero)"
+                  :srcset="srcset(hero.variants)"
+                  sizes="(min-width: 1100px) 1100px, 120vw"
+                  :alt="hero.alt ?? `${v.brand} ${v.model}`"
+                  :style="cropStyle"
+                  fetchpriority="high"
+                  @load="measureCar"
+                />
+                <span class="ring" aria-hidden="true" />
+              </div>
             </figure>
             <span class="chip"><Icon :name="v.specs.fuel === 'ELECTRIC' ? 'bolt' : 'fuel'" :size="13" /> {{ label(v.specs.fuel) }} · {{ t('car.s.l100', { n: v.specs.fuelEconomy ?? '—' }) }}</span>
             <p v-if="credit" class="credit">
@@ -789,9 +847,23 @@ h1 {
   margin: 0;
   animation: drive 1.1s cubic-bezier(0.16, 0.84, 0.3, 1) 0.1s both;
 }
+/* .frame is the car's own box: cropped to the car (see measureCar), as wide as the stage
+   allows but never taller than 300px, so no photo runs past the card. */
+.frame {
+  position: relative;
+  width: min(100%, 300px * 3);
+  max-height: 340px;
+  margin: 0 auto;
+}
+.frame.fitted {
+  width: 100%;
+  max-width: calc(300px * var(--r, 3));
+  max-height: 300px;
+}
 .car img {
   position: relative;
   z-index: 1;
+  display: block;
   width: 100%;
   max-height: 340px;
   object-fit: contain;

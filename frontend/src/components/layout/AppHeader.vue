@@ -382,8 +382,10 @@ async function logout() {
   }
 }
 @media (max-width: 480px) {
+  /* phones: the sign-in link stays (compact) so customers can still log in */
   .signin {
-    display: none;
+    font-size: 0.8rem;
+    white-space: nowrap;
   }
   .cta {
     height: 34px;
@@ -405,6 +407,14 @@ async function logout() {
   }
   .lang-btn > svg:last-child {
     display: none;
+  }
+}
+@media (max-width: 360px) {
+  .lang-btn > svg:first-child {
+    display: none;
+  }
+  .cta {
+    padding: 0 10px;
   }
 }
 </style>

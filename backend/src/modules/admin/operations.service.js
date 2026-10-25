@@ -28,7 +28,8 @@ const LIST_SELECT = `
          ct.id AS contract_id, ct.contract_number, ct.status AS contract_status, ct.signed_at AS contract_signed_at,
          (SELECT json_build_object('status', p.status, 'provider', p.provider, 'methodType', p.payment_method_type,
                                    'succeededAt', p.succeeded_at, 'amountMinor', p.amount_minor)
-            FROM payments p WHERE p.booking_id = b.id ORDER BY (p.status = 'SUCCEEDED') DESC, p.created_at DESC LIMIT 1) AS payment,
+            FROM payments p WHERE p.booking_id = b.id AND NOT p.is_balance AND p.parent_payment_id IS NULL
+            ORDER BY (p.status = 'SUCCEEDED') DESC, p.created_at DESC LIMIT 1) AS payment,
          NULL AS timeline,
          (SELECT json_agg(json_build_object('type', i.item_type, 'description', i.description, 'quantity', i.quantity,
                                             'amountMinor', i.amount_minor) ORDER BY i.sort_order)

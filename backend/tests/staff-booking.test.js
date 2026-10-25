@@ -6,6 +6,8 @@ import { createApp } from "../src/app.js";
 import { pool } from "../src/db/pool.js";
 import { seedCoolkids } from "../src/db/seed-coolkids.js";
 import { seedAdmin } from "../src/db/seed-admin.js";
+import { confirmPayment } from "../src/modules/bookings/bookings.service.js";
+import { ledger } from "../src/modules/admin/fleetops.service.js";
 
 const app = createApp({ identityProvider: fakeProvider() });
 const SLUG = "honda-city-e-hev-black-outshine-2026";
@@ -134,5 +136,55 @@ describe("staff booking on a customer's behalf, paid outside the system", () => 
     assert.equal(ok.body.data.status, "CONFIRMED");
     const { rows } = await pool.query("SELECT u.email FROM bookings b JOIN users u ON u.id = b.user_id WHERE b.booking_number = $1", [n]);
     assert.equal(rows[0].email, "phone-0811112222@walkin.coolkids.local", "no e-mail: an account keyed by the phone number");
+  });
+});
+
+describe("rent balance + deposit paid online after confirmation", () => {
+  const admin = request.agent(app);
+  let number;
+  let b;
+
+  before(async () => {
+    await admin.post("/api/v1/auth/login").set("Origin", ORIGIN).send({ login: "admin", password: "1234" }).expect(204);
+    const res = await admin.post("/api/v1/admin/bookings").set("Origin", ORIGIN)
+      .send(bookingBody({ pickupAt: inDays(40), returnAt: inDays(42), customerEmail: "balance@example.com", customer: { ...bookingBody().customer, phone: "0822223333" } })).expect(201);
+    number = res.body.data.number;
+    for (const [i, kind] of ["id_front", "id_back", "license_front"].entries()) {
+      await admin.put(`/api/v1/bookings/${number}/documents/${kind}`).set("Origin", ORIGIN).set("Content-Type", "image/png").send(tinyPng(50 + i)).expect(200);
+    }
+    b = (await admin.post(`/api/v1/admin/bookings/${number}/confirm-offline`).set("Origin", ORIGIN).send({ paidMinor: 100_000, method: "transfer" }).expect(200)).body.data;
+  });
+
+  test("a confirmed booking shows what is still owed: rent balance + deposit", () => {
+    assert.equal(b.balance.rentDueMinor, b.money.totalMinor - 100_000);
+    assert.equal(b.balance.depositDueMinor, b.money.depositMinor);
+    assert.equal(b.balance.dueMinor, b.money.payAtPickupMinor);
+  });
+
+  test("staff get a payment link + QR; only the newest link stays payable; paying it settles rent and deposit", async () => {
+    const first = await admin.post(`/api/v1/admin/bookings/${number}/balance-link`).set("Origin", ORIGIN).send({}).expect(200);
+    assert.ok(first.body.data.qr.startsWith("data:image/png"));
+    assert.equal(first.body.data.amountMinor, b.balance.dueMinor);
+    const second = await admin.post(`/api/v1/admin/bookings/${number}/balance-link`).set("Origin", ORIGIN).send({}).expect(200);
+    const oldId = first.body.data.url.split("/").pop();
+    const leadId = second.body.data.url.split("/").pop();
+    const { rows: old } = await pool.query("SELECT status FROM payments WHERE id = $1 OR parent_payment_id = $1", [oldId]);
+    assert.ok(old.every((r) => r.status === "CANCELLED"), "the replaced link cannot be paid any more");
+
+    await assert.rejects(confirmPayment(leadId, { amountMinor: 1 }), /does not match/);
+    await confirmPayment(leadId, { amountMinor: b.balance.dueMinor, methodType: "card" });
+
+    const after = (await admin.get(`/api/v1/bookings/${number}`).set("Origin", ORIGIN).expect(200)).body.data;
+    assert.equal(after.balance.dueMinor, 0);
+    assert.equal(after.money.payAtPickupMinor, 0);
+    assert.equal(after.payment.amountMinor, 100_000, "the reservation payment shown is still the first one");
+    const l = await ledger(after.id ?? (await pool.query("SELECT id FROM bookings WHERE booking_number = $1", [number])).rows[0].id);
+    assert.equal(l.rentDueMinor, 0);
+    assert.equal(l.depositHeldMinor, b.money.depositMinor);
+  });
+
+  test("nothing left to pay: no new link", async () => {
+    const res = await admin.post(`/api/v1/admin/bookings/${number}/balance-link`).set("Origin", ORIGIN).send({}).expect(409);
+    assert.equal(res.body.error.code, "NOTHING_DUE");
   });
 });

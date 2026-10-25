@@ -40,7 +40,10 @@ async function stripe(path, { method = "GET", body, idempotencyKey } = {}) {
 const stripeProvider = {
   name: "stripe",
 
-  async createCheckout({ payment, booking, customerEmail, successUrl, cancelUrl, expiresAt, locale }) {
+  async createCheckout({ payment, booking, customerEmail, successUrl, cancelUrl, expiresAt, locale, lines }) {
+    const items = lines?.length
+      ? lines
+      : [{ name: `Coolkids ${booking.booking_number}`, description: booking.description, amountMinor: payment.amount_minor }];
     const session = await stripe("/checkout/sessions", {
       method: "POST",
       idempotencyKey: payment.idempotency_key,
@@ -52,21 +55,26 @@ const stripeProvider = {
         success_url: `${successUrl}${successUrl.includes("?") ? "&" : "?"}session_id={CHECKOUT_SESSION_ID}`,
         cancel_url: cancelUrl,
         expires_at: Math.floor(expiresAt.getTime() / 1000),
-        line_items: {
-          0: {
+        line_items: Object.fromEntries(
+          items.map((it, i) => [i, {
             quantity: 1,
             price_data: {
               currency: payment.currency.toLowerCase(),
-              unit_amount: payment.amount_minor,
-              product_data: { name: `Coolkids ${booking.booking_number}`, description: booking.description },
+              unit_amount: it.amountMinor,
+              product_data: { name: it.name, ...(it.description ? { description: it.description } : {}) },
             },
-          },
-        },
+          }]),
+        ),
         metadata: { payment_id: payment.id, booking_id: booking.id, booking_number: booking.booking_number },
         payment_intent_data: { metadata: { payment_id: payment.id, booking_number: booking.booking_number } },
       },
     });
     return { providerPaymentId: session.id, url: session.url };
+  },
+
+  /** Closes a checkout nobody should pay any more (replaced by a newer one). */
+  async expire(sessionId) {
+    await stripe(`/checkout/sessions/${encodeURIComponent(sessionId)}/expire`, { method: "POST" });
   },
 
   async retrieve(sessionId) {
