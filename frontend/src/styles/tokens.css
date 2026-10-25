@@ -1,0 +1,118 @@
+/*
+ * Design tokens — the single source for colour, type, spacing, radius, motion.
+ * Components consume semantic tokens only (never raw hex). CMS-driven theme
+ * values (website_content "site.theme") override these at runtime on :root.
+ */
+:root {
+  /* Palette — Coolkids: clean light surfaces, night-navy bands, one brand red */
+  --c-ink-950: #0e1016;
+  --c-ink-900: #14161f;
+  --c-ink-850: #1b1e29;
+  --c-ink-800: #252836;
+  --c-ink-700: #3a3d4c;
+  --c-ink-500: #6b6e7a;
+  --c-ink-400: #8d909b;
+  --c-ink-200: #d4d5da;
+  --c-ink-100: #ececee;
+  --c-ink-50: #f5f5f3;
+  --c-red-500: #e2362c;
+  --c-red-400: #f0524a;
+  --c-red-600: #c22a21;
+  --c-red-50: #fdeceb;
+
+  /* Semantic */
+  --bg: #f3f3f1;
+  --surface: #ffffff;
+  --surface-raised: #fafaf9;
+  --surface-glass: rgb(255 255 255 / 0.78);
+  --night: var(--c-ink-900);
+  --night-text: #f2f2f4;
+  --border: rgb(17 18 24 / 0.08);
+  --border-strong: rgb(17 18 24 / 0.16);
+  --text: #121319;
+  --text-muted: var(--c-ink-500);
+  --text-inverse: #ffffff;
+  --accent: var(--c-red-500);
+  --accent-hover: var(--c-red-400);
+  --accent-press: var(--c-red-600);
+  --accent-soft: var(--c-red-50);
+  --focus-ring: 0 0 0 2px var(--surface), 0 0 0 4px var(--accent);
+
+  --success: #4fbf8b;
+  --danger: #e5675c;
+  --warning: #e2a34a;
+  --info: #6ea8fe;
+
+  /* Availability calendar semantics (spec 1.7) */
+  --avail-free: #3fa877;
+  --avail-booked: #d4574c;
+  --avail-maintenance: #e0913a;
+  --avail-blocked: #4a4d55;
+
+  /* Typography */
+  --font-display: "Unbounded", "IBM Plex Sans Thai", "Inter", "PingFang SC", "Microsoft YaHei", "Noto Sans SC", system-ui, sans-serif;
+  --font-body: "Inter", "IBM Plex Sans Thai", "PingFang SC", "Microsoft YaHei", "Noto Sans SC", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --fs-xs: 0.75rem;
+  --fs-sm: 0.875rem;
+  --fs-md: 1rem;
+  --fs-lg: 1.125rem;
+  --fs-xl: 1.375rem;
+  --fs-2xl: clamp(1.75rem, 1.2rem + 2vw, 2.5rem);
+  --fs-hero: clamp(2.5rem, 1.2rem + 5.5vw, 5.75rem);
+  --tracking-display: -0.02em;
+  --tracking-caps: 0.14em;
+
+  /* Spacing (4px base) */
+  --s-1: 0.25rem;
+  --s-2: 0.5rem;
+  --s-3: 0.75rem;
+  --s-4: 1rem;
+  --s-5: 1.5rem;
+  --s-6: 2rem;
+  --s-7: 3rem;
+  --s-8: 4rem;
+  --s-9: 6rem;
+  --gutter: clamp(1rem, 4vw, 3rem);
+  --content-max: 1360px;
+
+  /* Shape — soft, friendly radii (rRw reference) */
+  --r-sm: 8px;
+  --r-md: 14px;
+  --r-lg: 24px;
+  --r-pill: 999px;
+
+  --shadow-lg: 0 24px 64px -28px rgb(14 16 22 / 0.35);
+  --shadow-sm: 0 6px 24px -12px rgb(14 16 22 / 0.18);
+  --blur-glass: 18px;
+
+  /* Frosted glass (glassmorphism) — banners, cards and floating panels.
+     Light glass sits on the pale page; dark glass sits on video/photography. */
+  --glass-bg: linear-gradient(140deg, rgb(255 255 255 / 0.62), rgb(255 255 255 / 0.34));
+  --glass-border: rgb(255 255 255 / 0.7);
+  --glass-shadow: 0 18px 44px -22px rgb(14 16 22 / 0.28), inset 0 1px 0 rgb(255 255 255 / 0.85);
+  --glass-filter: blur(var(--blur-glass)) saturate(120%);
+  --glass-dark-bg: linear-gradient(140deg, rgb(255 255 255 / 0.18), rgb(255 255 255 / 0.08));
+  --glass-dark-border: rgb(255 255 255 / 0.22);
+  --glass-dark-shadow: 0 24px 60px -24px rgb(0 0 0 / 0.55), inset 0 1px 0 rgb(255 255 255 / 0.28);
+
+  /* Motion */
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --dur-fast: 140ms;
+  --dur-base: 260ms;
+  --dur-slow: 560ms;
+  --dur-cinematic: 1200ms;
+
+  --z-header: 50;
+  --z-dropdown: 60;
+  --z-modal: 100;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --dur-fast: 0ms;
+    --dur-base: 0ms;
+    --dur-slow: 0ms;
+    --dur-cinematic: 0ms;
+  }
+}

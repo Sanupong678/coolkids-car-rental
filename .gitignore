@@ -1,0 +1,19 @@
+node_modules/
+dist/
+npm-debug.log*
+coolkids.tgz
+
+# Secrets: only the *.example files are kept
+.env
+.env.*
+!.env.example
+
+# Runtime files: uploaded car photos, ID documents, signatures, contract PDFs (PII)
+backend/uploads/
+backend/storage/
+backups/
+
+# Local editor / assistant settings
+.claude/settings.local.json
+.vscode/*
+!.vscode/extensions.json

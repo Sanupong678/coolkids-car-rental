@@ -1,0 +1,38 @@
+# Local stack: Postgres + API + Vite dev server.
+#   docker compose up -d db          # just the database
+#   docker compose up --build        # everything
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: car_rental
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports: ["5433:5432"] # 5433 avoids clashing with a locally installed Postgres
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d car_rental"]
+      interval: 5s
+      retries: 10
+
+  api:
+    build: ./backend
+    env_file: ./backend/.env
+    environment:
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_NAME: car_rental
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      NODE_ENV: development
+    ports: ["5000:5000"]
+    depends_on:
+      db: { condition: service_healthy }
+
+  web:
+    build: ./frontend
+    ports: ["5173:5173"]
+    depends_on: [api]
+
+volumes:
+  pgdata:

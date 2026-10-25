@@ -1,0 +1,70 @@
+# Production stack for the VPS (Ubuntu 24.04): Caddy (HTTPS) → nginx (SPA + /api) → API → Postgres.
+# Only Caddy is reachable from the internet (ports 80/443); the rest talk on the private network.
+#   cp deploy/.env.example .env              # DB password + domain for this file
+#   cp backend/.env.example backend/.env     # API settings (see docs/DEPLOY-VPS.md)
+#   docker compose -f docker-compose.prod.yml up -d --build
+x-logging: &logging
+  driver: json-file
+  options: { max-size: "10m", max-file: "5" }
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: car_rental
+      POSTGRES_USER: coolkids
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD in .env}
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U coolkids -d car_rental"]
+      interval: 5s
+      retries: 20
+    logging: *logging
+
+  api:
+    build: ./backend
+    restart: unless-stopped
+    env_file: ./backend/.env
+    environment:
+      NODE_ENV: production
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_NAME: car_rental
+      DB_USER: coolkids
+      DB_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      # Only used when S3_* (Cloudflare R2) is empty: photos, signatures, contract PDFs.
+      - uploads:/app/uploads
+      - storage:/app/storage
+    depends_on:
+      db: { condition: service_healthy }
+    logging: *logging
+
+  web:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.prod
+    restart: unless-stopped
+    depends_on: [api]
+    logging: *logging
+
+  caddy:
+    image: caddy:2.8-alpine
+    restart: unless-stopped
+    ports: ["80:80", "443:443", "443:443/udp"]
+    environment:
+      SITE_DOMAIN: ${SITE_DOMAIN:?set SITE_DOMAIN in .env}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on: [web]
+    logging: *logging
+
+volumes:
+  pgdata:
+  uploads:
+  storage:
+  caddy_data:
+  caddy_config:
