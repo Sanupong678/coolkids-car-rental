@@ -1,11 +1,13 @@
 <script setup>
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { createBooking, getBooking, submitForReview } from '@/api/bookings'
+import { confirmOffline, staffCreateBooking } from '@/api/admin'
 import { useAuthStore } from '@/stores/auth'
 import { money, toLocalInput } from '@/utils/format'
 import { useI18n } from '@/i18n'
 import Icon from '@/components/ui/Icon.vue'
 import AddressSearch from './AddressSearch.vue'
+import AvailabilityCalendar from './AvailabilityCalendar.vue'
 import IdentityDocuments from './IdentityDocuments.vue'
 import MapPicker from './MapPicker.vue'
 import TermsPopup from './TermsPopup.vue'
@@ -22,6 +24,8 @@ const props = defineProps({
   vehicle: { type: Object, default: null },
   dates: { type: Object, default: null }, // { from: 'YYYY-MM-DD', to: 'YYYY-MM-DD' } from the calendar
   resumeNumber: { type: String, default: null },
+  // back office: staff fill the form in for a customer who pays outside the system
+  staff: { type: Boolean, default: false },
 })
 const emit = defineEmits(['close'])
 
@@ -48,8 +52,8 @@ const quote = ref(null)
 const deliveryNotes = ref('')
 const notes = ref('')
 const c = ref({
-  fullName: auth.me?.fullName ?? '',
-  phone: auth.me?.phone ?? '',
+  fullName: props.staff ? '' : (auth.me?.fullName ?? ''),
+  phone: props.staff ? '' : (auth.me?.phone ?? ''),
   countryCode: 'TH',
   idType: 'NATIONAL_ID',
   idNumber: '',
@@ -62,7 +66,22 @@ const c = ref({
 const decl = ref({ hasOriginalLicense: false, infoMatchesLicense: false })
 // The shop's chat form: where the car is used, where the renter stays, Facebook / IG.
 const realEmail = (e) => (e && !/@(line\.coolkids\.invalid|coolkids\.local)$/i.test(e) ? e : '')
-const use = ref({ areaOfUse: t('bk.areaDefault'), stayLocation: '', socialUrl: '', rentalPurpose: 'TRAVEL', contactEmail: realEmail(auth.me?.email) })
+const use = ref({ areaOfUse: t('bk.areaDefault'), stayLocation: '', socialUrl: '', rentalPurpose: 'TRAVEL', contactEmail: props.staff ? '' : realEmail(auth.me?.email) })
+const customerEmail = ref('') // staff mode: finds / makes the customer's account
+
+// Where the car goes back: the branch, the delivery address, or another address (priced by distance).
+const returnType = ref('BRANCH')
+const returnQuote = ref(null)
+watch(() => fulfillment.value, (f) => {
+  if (f !== 'DELIVERY' && returnType.value === 'SAME_AS_DELIVERY') returnType.value = 'BRANCH'
+})
+
+// Days picked on the availability calendar keep the times already in the fields.
+const timeOf = (local, fallback = '10:00') => (local?.length >= 16 ? local.slice(11, 16) : fallback)
+function onDates({ from, to }) {
+  pickupAt.value = `${from}T${timeOf(pickupAt.value)}`
+  returnAt.value = `${to}T${timeOf(returnAt.value)}`
+}
 
 const COUNTRIES = ['TH', 'CN', 'JP', 'KR', 'MY', 'SG', 'IN', 'VN', 'LA', 'MM', 'KH', 'ID', 'PH', 'HK', 'TW', 'US', 'GB', 'DE', 'FR', 'IT', 'NL', 'RU', 'AU', 'CA']
 function onCountry() {
@@ -88,7 +107,10 @@ const deliveryText = computed(() => {
   return p.freeKm ? t('common.freeKm', { km: p.freeKm, price: p.perKmMinor / 100 }) : t('common.perKm', { price: p.perKmMinor / 100 })
 })
 const deliveryFee = computed(() => (fulfillment.value === 'DELIVERY' ? (quote.value?.feeMinor ?? 0) : 0))
-const estimate = computed(() => daily.value * days.value + deliveryFee.value)
+const returnFee = computed(() =>
+  returnType.value === 'ADDRESS' ? (returnQuote.value?.feeMinor ?? 0) : returnType.value === 'SAME_AS_DELIVERY' ? deliveryFee.value : 0,
+)
+const estimate = computed(() => daily.value * days.value + deliveryFee.value + returnFee.value)
 const currency = computed(() => v.value?.price.currency ?? booking.value?.money.currency ?? 'THB')
 
 const thaiIdOk = computed(() => c.value.idType !== 'NATIONAL_ID' || c.value.countryCode !== 'TH' || /^\d{13}$/.test(c.value.idNumber.replace(/[\s-]/g, '')))
@@ -100,6 +122,7 @@ const problems = computed(() => {
   const blank = (v, min) => v.trim().length < min
   if (days.value <= 0) add('returnAt', t('bk.p.returnAt'))
   if (fulfillment.value === 'DELIVERY' && !quote.value) add('delivery', t('bk.p.delivery'))
+  if (returnType.value === 'ADDRESS' && !returnQuote.value) add('returnPlace', t('bk.p.returnPlace'))
   if (blank(c.value.fullName, 2)) add('fullName', t('bk.p.fullName'))
   if (blank(c.value.phone, 1)) add('phone', t('bk.p.phone'))
   else if (!/^\+?[0-9 ()-]{6,20}$/.test(c.value.phone.trim())) add('phone', t('bk.p.phoneBad'))
@@ -160,13 +183,17 @@ async function submitDetails() {
   busy.value = true
   error.value = ''
   try {
-    booking.value = await createBooking({
+    const body = {
       vehicleSlug: v.value.slug,
       pickupAt: new Date(pickupAt.value).toISOString(),
       returnAt: new Date(returnAt.value).toISOString(),
       fulfillment: fulfillment.value,
       ...(fulfillment.value === 'DELIVERY'
         ? { delivery: { placeId: quote.value.placeId ?? undefined, address: quote.value.address, lat: quote.value.lat, lng: quote.value.lng, notes: deliveryNotes.value || undefined } }
+        : {}),
+      returnType: returnType.value,
+      ...(returnType.value === 'ADDRESS'
+        ? { returnAddress: { placeId: returnQuote.value.placeId ?? undefined, address: returnQuote.value.address, lat: returnQuote.value.lat, lng: returnQuote.value.lng } }
         : {}),
       notes: notes.value || undefined,
       areaOfUse: use.value.areaOfUse.trim(),
@@ -177,7 +204,10 @@ async function submitDetails() {
       contactEmail: use.value.contactEmail.trim() || undefined,
       customer: { ...c.value, fullName: c.value.fullName.trim(), phone: c.value.phone.trim(), idNumber: c.value.idNumber.trim(), licenseNumber: c.value.licenseNumber.trim() },
       declarations: { hasOriginalLicense: true, infoMatchesLicense: true },
-    })
+    }
+    booking.value = props.staff
+      ? await staffCreateBooking({ ...body, customerEmail: customerEmail.value.trim() || undefined })
+      : await createBooking(body)
     await afterDetails()
   } catch (err) {
     error.value = explain(err)
@@ -224,6 +254,29 @@ async function submit() {
   }
 }
 
+// Staff: the customer paid outside the system; record it and confirm straight away.
+const paidBaht = ref(0)
+const paidMethod = ref('transfer')
+const paidNote = ref('')
+async function confirmStaff() {
+  if (!booking.value?.documents?.complete || busy.value) return
+  busy.value = true
+  error.value = ''
+  try {
+    booking.value = await confirmOffline(booking.value.number, {
+      paidMinor: Math.round(Number(paidBaht.value || 0) * 100),
+      method: paidMethod.value,
+      note: paidNote.value.trim() || undefined,
+    })
+    step.value = 3
+    scroller.value?.scrollTo({ top: 0 })
+  } catch (err) {
+    error.value = explain(err)
+  } finally {
+    busy.value = false
+  }
+}
+
 // ---------------------------------------------------------------- step 3
 const holdLeft = ref('')
 let holdTimer
@@ -243,7 +296,8 @@ onMounted(async () => {
   document.documentElement.style.overflow = 'hidden'
   dialog.value.showModal()
   // A new booking starts with the rental terms: read to the end and accept before the form.
-  if (!props.resumeNumber) showTerms.value = true
+  if (props.staff) termsLocale.value = 'th'
+  else if (!props.resumeNumber) showTerms.value = true
   holdTimer = setInterval(tickHold, 1000)
   if (props.resumeNumber) {
     busy.value = true
@@ -294,6 +348,10 @@ const HEADS = { 1: ['car', 'bk.head1'], 2: ['camera', 'bk.head2'], 3: ['check', 
         <form v-if="step === 1 && v" id="bk-details" class="details" novalidate @submit.prevent="submitDetails">
           <section>
             <h3>{{ t('bk.period') }}</h3>
+            <div class="cal-wrap">
+              <AvailabilityCalendar :slug="v.slug" @select="onDates" />
+              <small class="hint">{{ t('bk.calHint') }}</small>
+            </div>
             <div class="row2">
               <label class="f"><span>{{ t('bk.pickupAt') }}</span><input v-model="pickupAt" type="datetime-local" required /></label>
               <label class="f" data-field="returnAt" :class="{ bad: bad('returnAt') }"><span>{{ t('bk.returnAt') }}</span><input v-model="returnAt" type="datetime-local" required :min="pickupAt" /><em v-if="bad('returnAt')" class="why">{{ problems.returnAt }}</em></label>
@@ -321,6 +379,37 @@ const HEADS = { 1: ['car', 'bk.head1'], 2: ['camera', 'bk.head2'], 3: ['check', 
               </div>
               <label class="f"><span>{{ t('bk.driverNotes') }} <small>({{ t('common.optional') }})</small></span><input v-model="deliveryNotes" type="text" maxlength="300" :placeholder="t('bk.driverNotesPh')" /></label>
             </template>
+          </section>
+
+          <section>
+            <h3>{{ t('bk.returnPlace') }}</h3>
+            <div class="choice three">
+              <label :class="{ on: returnType === 'BRANCH' }">
+                <input v-model="returnType" type="radio" value="BRANCH" />
+                <Icon name="pin" :size="18" />
+                <span><strong>{{ t('bk.returnBranch') }}</strong><small>{{ v.homeLocation?.name ? tx(v.homeLocation.name) : t('bk.branchDefault') }} · {{ t('common.free') }}</small></span>
+              </label>
+              <label v-if="fulfillment === 'DELIVERY'" :class="{ on: returnType === 'SAME_AS_DELIVERY' }">
+                <input v-model="returnType" type="radio" value="SAME_AS_DELIVERY" />
+                <Icon name="car" :size="18" />
+                <span><strong>{{ t('bk.returnSame') }}</strong><small>{{ t('bk.returnSameD') }}</small></span>
+              </label>
+              <label :class="{ on: returnType === 'ADDRESS' }">
+                <input v-model="returnType" type="radio" value="ADDRESS" />
+                <Icon name="map" :size="18" />
+                <span><strong>{{ t('bk.returnOther') }}</strong><small>{{ t('bk.returnOtherD') }}</small></span>
+              </label>
+            </div>
+            <div v-if="returnType === 'ADDRESS'" data-field="returnPlace" :class="{ 'bad-box': bad('returnPlace') }">
+              <AddressSearch :quote="returnQuote" :vehicle-slug="v.slug" :policy="v.delivery" @quote="returnQuote = $event" />
+              <em v-if="bad('returnPlace')" class="why">{{ problems.returnPlace }}</em>
+            </div>
+          </section>
+
+          <section v-if="staff" class="staff-box">
+            <h3>{{ t('bk.staffCustomer') }}</h3>
+            <label class="f"><span>{{ t('bk.staffEmail') }} <small>({{ t('common.optional') }})</small></span><input v-model="customerEmail" type="email" maxlength="254" autocomplete="off" placeholder="customer@gmail.com" /></label>
+            <small class="hint">{{ t('bk.staffEmailHint') }}</small>
           </section>
 
           <section>
@@ -404,15 +493,16 @@ const HEADS = { 1: ['car', 'bk.head1'], 2: ['camera', 'bk.head2'], 3: ['check', 
         <!-- 3. sent for review -->
         <div v-else-if="step === 3 && booking" class="sent">
           <span class="badge"><Icon name="check" :size="26" /></span>
-          <h3>{{ t('bk.sentTitle') }}</h3>
-          <p>{{ t('bk.sentBody', { fee: money(booking.money.dueNowMinor, booking.money.currency) }) }}</p>
+          <h3>{{ staff ? t('bk.staffConfirmedTitle') : t('bk.sentTitle') }}</h3>
+          <p v-if="staff">{{ t('bk.staffConfirmedBody', { paid: money(Math.round(Number(paidBaht || 0) * 100), booking.money.currency) }) }}</p>
+          <p v-else>{{ t('bk.sentBody', { fee: money(booking.money.dueNowMinor, booking.money.currency) }) }}</p>
           <dl class="sum">
             <div><dt>{{ t('bk.number') }}</dt><dd>{{ booking.number }}</dd></div>
             <div><dt>{{ t('bk.car') }}</dt><dd>{{ booking.vehicle.brand }} {{ booking.vehicle.model }} {{ booking.vehicle.trim }}</dd></div>
             <div><dt>{{ t('bk.pickup') }}</dt><dd>{{ fmt(booking.pickupAt) }}</dd></div>
             <div><dt>{{ t('bk.return') }}</dt><dd>{{ fmt(booking.returnAt) }} · {{ t('common.days', { n: booking.rentalDays }) }}</dd></div>
           </dl>
-          <p v-if="holdLeft" class="hold"><Icon name="clock" :size="14" /> {{ t('bk.hold') }}</p>
+          <p v-if="holdLeft && !staff" class="hold"><Icon name="clock" :size="14" /> {{ t('bk.hold') }}</p>
         </div>
         <div v-else-if="busy" class="loading"><span class="spinner" /></div>
       </div>
@@ -428,11 +518,26 @@ const HEADS = { 1: ['car', 'bk.head1'], 2: ['camera', 'bk.head2'], 3: ['check', 
             </ul>
           </div>
           <div class="est">
-            <small>{{ t('common.days', { n: days }) }} × {{ money(daily, currency) }}<template v-if="deliveryFee"> + {{ t('bk.deliveryFee') }} {{ money(deliveryFee, currency) }}</template></small>
+            <small>{{ t('common.days', { n: days }) }} × {{ money(daily, currency) }}<template v-if="deliveryFee"> + {{ t('bk.deliveryFee') }} {{ money(deliveryFee, currency) }}</template><template v-if="returnFee"> + {{ t('bk.returnFee') }} {{ money(returnFee, currency) }}</template></small>
             <strong>{{ money(estimate, currency) }}</strong>
           </div>
           <button type="submit" form="bk-details" class="primary" :disabled="busy">
             <span v-if="!busy">{{ t('bk.continue') }}</span><span v-else class="spinner" />
+          </button>
+        </template>
+        <template v-else-if="step === 2 && booking?.documents && staff">
+          <div class="staff-pay">
+            <label class="f"><span>{{ t('bk.staffPaid') }}</span><input v-model.number="paidBaht" type="number" min="0" step="1" inputmode="numeric" /></label>
+            <div class="seg" role="radiogroup">
+              <label :class="{ on: paidMethod === 'transfer' }"><input v-model="paidMethod" type="radio" value="transfer" />{{ t('bk.staffTransfer') }}</label>
+              <label :class="{ on: paidMethod === 'cash' }"><input v-model="paidMethod" type="radio" value="cash" />{{ t('bk.staffCash') }}</label>
+            </div>
+            <label class="f"><span>{{ t('bk.staffNote') }}</span><input v-model="paidNote" type="text" maxlength="300" /></label>
+            <small class="hint">{{ t('bk.staffPaidHint') }}</small>
+          </div>
+          <button type="button" class="primary wide" :disabled="!booking.documents.complete || busy" @click="confirmStaff">
+            <span v-if="busy" class="spinner" />
+            <template v-else>{{ booking.documents.complete ? t('bk.staffConfirm') : t('bk.needDocs') }}</template>
           </button>
         </template>
         <template v-else-if="step === 2 && booking?.documents">
@@ -930,5 +1035,58 @@ h3 i,
   .foot {
     grid-template-columns: 1fr;
   }
+}
+
+/* availability calendar above the date fields */
+.cal-wrap {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 12px;
+  padding: 12px;
+  border: 1px solid #e3e4e8;
+  border-radius: 16px;
+}
+.hint {
+  font-size: 0.75rem;
+  color: #6b6e7a;
+}
+.choice.three {
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+/* back office: who the booking is for, and what they already paid */
+.staff-box {
+  padding: 12px 14px;
+  border: 1px dashed #e2362c;
+  border-radius: 16px;
+  background: #fff7f6;
+}
+.staff-pay {
+  display: grid;
+  gap: 8px;
+  width: 100%;
+  margin-bottom: 10px;
+}
+.seg {
+  display: flex;
+  gap: 6px;
+}
+.seg label {
+  flex: 1;
+  padding: 9px 12px;
+  border: 1px solid #e3e4e8;
+  border-radius: 12px;
+  text-align: center;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+.seg label.on {
+  border-color: #e2362c;
+  background: #fff1f0;
+  font-weight: 600;
+}
+.seg input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
 }
 </style>

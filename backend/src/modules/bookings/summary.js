@@ -52,19 +52,19 @@ const L = {
   th: {
     car: "รุ่นรถ : ", pickup: "วันที่ เวลา รับรถ: ", ret: "วันที่ เวลา คืนรถ: ", area: "สถานที่ใช้รถ : ",
     from: "สถานที่รับรถ: ", to: "สถานที่ส่งคืนรถ : ", rental: "ค่าเช่า ", discount: "ส่วนลด ", deposit: "เงินประกัน ",
-    delivery: "ค่าบริการรับส่งรถ ", total: "รวม ", paid: "ชำระค่าจองแล้ว ", due: "วันรับรถชำระ ", unit: " บาท",
+    delivery: "ค่าบริการรับส่งรถ ", returnFee: "ค่าบริการรับรถคืน ", total: "รวม ", paid: "ชำระค่าจองแล้ว ", due: "วันรับรถชำระ ", unit: " บาท",
     feeNote: "เงินจองจะถูกนำไปหักในค่าใช้จ่ายวันรับรถ",
   },
   en: {
     car: "Car: ", pickup: "Pick-up: ", ret: "Return: ", area: "Area of use: ",
     from: "Pick-up place: ", to: "Return place: ", rental: "Rental ", discount: "Discount ", deposit: "Deposit ",
-    delivery: "Delivery ", total: "Total ", paid: "Reservation fee paid ", due: "To pay at pick-up ", unit: " THB",
+    delivery: "Delivery ", returnFee: "Collection ", total: "Total ", paid: "Reservation fee paid ", due: "To pay at pick-up ", unit: " THB",
     feeNote: "The reservation fee is deducted from what you pay at pick-up.",
   },
   zh: {
     car: "车型：", pickup: "取车时间：", ret: "还车时间：", area: "用车地点：",
     from: "取车地点：", to: "还车地点：", rental: "租金 ", discount: "折扣 ", deposit: "押金 ",
-    delivery: "送车费 ", total: "合计 ", paid: "已付订金 ", due: "取车时支付 ", unit: " 泰铢",
+    delivery: "送车费 ", returnFee: "上门取车费 ", total: "合计 ", paid: "已付订金 ", due: "取车时支付 ", unit: " 泰铢",
     feeNote: "订金将在取车当天从应付款中扣除。",
   },
 };
@@ -79,6 +79,9 @@ export function bookingSummaryText(r, lang = "th") {
   const p = r.pricing_snapshot ?? {};
   const rawPlace = r.fulfillment_type === "DELIVERY" ? r.delivery_address?.address : r.branch_name;
   const place = PLACES[lang]?.[rawPlace] ?? rawPlace;
+  // where the car goes back: the branch unless the shop collects it from an address
+  const rawBack = r.return_type && r.return_type !== "BRANCH" ? r.return_address?.address : r.branch_name;
+  const back = PLACES[lang]?.[rawBack] ?? rawBack;
   const paid = r.payment?.status === "SUCCEEDED" ? Number(r.payment.amountMinor) : 0;
   const deposit = Number(r.deposit_minor);
   const total = Number(r.total_minor) + deposit; // rental + delivery − discount + deposit
@@ -89,12 +92,13 @@ export function bookingSummaryText(r, lang = "th") {
     "",
     `${l.area}${r.area_of_use ?? "-"}`,
     `${l.from}${place ?? "-"}`,
-    `${l.to}${place ?? "-"}`,
+    `${l.to}${back ?? "-"}`,
     "",
     `${l.rental}${baht(p.daily ?? 0)}*${r.rental_days}=${baht(p.rental ?? 0)}${l.unit}`,
     ...(Number(p.discount) ? [`${l.discount}${baht(p.discount)}${l.unit}`] : []),
     `${l.deposit}${baht(deposit)}${l.unit}`,
     ...(Number(p.delivery) ? [`${l.delivery}${baht(p.delivery)}${l.unit}`] : []),
+    ...(Number(p.returnPickup) ? [`${l.returnFee}${baht(p.returnPickup)}${l.unit}`] : []),
     `${l.total}${baht(total)}${l.unit}`,
     ...(paid ? [`${l.paid}${baht(paid)}${l.unit}`] : []),
     "",

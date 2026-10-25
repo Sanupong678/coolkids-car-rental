@@ -74,3 +74,7 @@ export const saveNotifyEmails = (body) => api('/admin/notify-emails', { method: 
 export const listBookingDocuments = (id) => api(`/admin/bookings/${id}/documents`).then((r) => r.data)
 export const signBookingDocument = (id, body) => api(`/admin/bookings/${id}/documents/sign`, { method: 'POST', body })
 export const sendBookingDocument = (id, body) => api(`/admin/bookings/${id}/documents/send`, { method: 'POST', body }).then((r) => r.data)
+
+// Booking on a customer's behalf, paid outside the system.
+export const staffCreateBooking = (body) => postJson('/admin/bookings', body)
+export const confirmOffline = (number, body) => postJson(`/admin/bookings/${number}/confirm-offline`, body)

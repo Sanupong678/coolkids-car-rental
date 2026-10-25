@@ -60,7 +60,7 @@ export function rentalDaysBetween(pickupAt, returnAt, graceMinutes) {
 }
 
 /** Quote = rental + delivery − promotion (+ tax when prices exclude VAT). */
-export function priceBooking(vehicle, days, deliveryMinor, settings) {
+export function priceBooking(vehicle, days, deliveryMinor, settings, returnMinor = 0) {
   const daily = vehicle.daily_rate_minor;
   let discountPerDay = 0;
   if (vehicle.promo_id && (!vehicle.promo_min_days || days >= vehicle.promo_min_days)) {
@@ -73,12 +73,13 @@ export function priceBooking(vehicle, days, deliveryMinor, settings) {
   }
   const rental = daily * days;
   const discount = discountPerDay * days;
-  const subtotal = rental + deliveryMinor;
+  const subtotal = rental + deliveryMinor + returnMinor;
   const tax = settings["pricing.tax_inclusive"] ? 0 : Math.round(((subtotal - discount) * settings["pricing.tax_rate_bps"]) / 10_000);
   return {
     daily,
     rental,
     delivery: deliveryMinor,
+    returnPickup: returnMinor, // driving out to collect the car (return address other than the branch)
     discount,
     tax,
     subtotal,
@@ -130,7 +131,10 @@ export async function deliveryQuote(input, vehicleSlug) {
 
 // ---------------------------------------------------------------- create
 
-export async function createBooking(auth, input, ctx) {
+/**
+ * @param opts.staff the back-office user keying the booking in for this customer (auth is the customer then)
+ */
+export async function createBooking(auth, input, ctx, opts = {}) {
   const settings = await getSettings();
   const now = new Date();
   const pickupAt = new Date(input.pickupAt);
@@ -150,6 +154,9 @@ export async function createBooking(auth, input, ctx) {
 
   // Network call happens before the transaction so no DB locks are held while waiting on Google.
   const delivery = input.fulfillment === "DELIVERY" ? await deliveryQuote(input.delivery, input.vehicleSlug) : null;
+  // Collecting the car somewhere else costs the same per km as delivering it there.
+  const returnType = input.returnType ?? "BRANCH";
+  const collect = returnType === "ADDRESS" ? await deliveryQuote(input.returnAddress, input.vehicleSlug) : returnType === "SAME_AS_DELIVERY" ? delivery : null;
 
   await expireStaleHolds();
 
@@ -166,7 +173,7 @@ export async function createBooking(auth, input, ctx) {
       if (days < v.min_rental_days) throw BadRequest(`Minimum rental is ${v.min_rental_days} days`, { returnAt: [`เช่าขั้นต่ำ ${v.min_rental_days} วัน`] });
       if (v.max_rental_days && days > v.max_rental_days) throw BadRequest(`Maximum rental is ${v.max_rental_days} days`);
 
-      const money = priceBooking(v, days, delivery?.feeMinor ?? 0, settings);
+      const money = priceBooking(v, days, delivery?.feeMinor ?? 0, settings, collect?.feeMinor ?? 0);
       // "โอน = จอง": only the reservation fee is paid online, after staff approve the documents.
       money.dueNow = Math.min(Number(settings["booking.reservation_fee_minor"]), money.total);
       const userId = auth.user.id;
@@ -203,14 +210,21 @@ export async function createBooking(auth, input, ctx) {
         ? { address: delivery.address ?? input.delivery.address, placeId: delivery.placeId, lat: delivery.lat, lng: delivery.lng,
             notes: input.delivery.notes ?? null, source: delivery.source }
         : null;
+      const returnAddress = returnType === "SAME_AS_DELIVERY"
+        ? deliveryAddress
+        : collect
+          ? { address: collect.address ?? input.returnAddress.address, placeId: collect.placeId, lat: collect.lat, lng: collect.lng,
+              notes: input.returnAddress.notes ?? null, source: collect.source }
+          : null;
       const { rows: bRows } = await db.query(
         `INSERT INTO bookings (user_id, vehicle_id, customer_identity_id, pickup_location_id, return_location_id,
            fulfillment_type, delivery_address, pickup_at, return_at, status, hold_expires_at, currency, rental_days,
            subtotal_minor, discount_minor, tax_minor, total_minor, deposit_minor, pricing_snapshot, promotion_id,
            source, customer_notes, customer_country, delivery_distance_m, delivery_duration_s,
-           review_status, amount_due_now_minor, area_of_use, stay_location, social_url, rental_purpose, contact_email)
-         VALUES ($1,$2,$3,$4,$4,$5,$6,$7,$8,'PENDING',$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,'WEB',$19,$20,$21,$22,
-                 'DRAFT',$23,$24,$25,$26,$27,$28)
+           review_status, amount_due_now_minor, area_of_use, stay_location, social_url, rental_purpose, contact_email,
+           return_type, return_address, return_distance_m, return_duration_s, created_by_staff)
+         VALUES ($1,$2,$3,$4,$4,$5,$6,$7,$8,'PENDING',$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$34,$19,$20,$21,$22,
+                 'DRAFT',$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33)
          RETURNING id, booking_number`,
         [
           userId, v.id, idRows[0].id, v.home_location_id, input.fulfillment,
@@ -218,11 +232,14 @@ export async function createBooking(auth, input, ctx) {
           money.subtotal, money.discount, money.tax, money.total, money.deposit,
           JSON.stringify({ engine: "coolkids-v1", ...money, taxRateBps: settings["pricing.tax_rate_bps"],
             taxInclusive: settings["pricing.tax_inclusive"], deliveryPolicy: delivery?.policy ?? vehicleFeePolicy(settings, v),
-            delivery: delivery && { distanceMeters: delivery.distanceMeters, durationSeconds: delivery.durationSeconds, source: delivery.source } }),
+            delivery: delivery && { distanceMeters: delivery.distanceMeters, durationSeconds: delivery.durationSeconds, source: delivery.source },
+            returnPlace: collect && { type: returnType, distanceMeters: collect.distanceMeters, durationSeconds: collect.durationSeconds, source: collect.source } }),
           money.promotionId, input.notes ?? null, c.countryCode,
           delivery?.distanceMeters ?? null, delivery?.durationSeconds ?? null,
           money.dueNow, input.areaOfUse ?? null, input.stayLocation ?? null, input.socialUrl ?? null, input.rentalPurpose ?? null,
           input.contactEmail ?? null,
+          returnType, returnAddress ? JSON.stringify(returnAddress) : null, collect?.distanceMeters ?? null, collect?.durationSeconds ?? null,
+          opts.staff?.user.id ?? null, opts.staff ? "ADMIN" : "WEB",
         ],
       );
       const booking = bRows[0];
@@ -230,6 +247,7 @@ export async function createBooking(auth, input, ctx) {
       const items = [
         ["RENTAL", `ค่าเช่า ${v.brand} ${v.model} ${days} วัน`, days, money.daily, money.rental, null],
         ...(money.delivery ? [["DELIVERY_FEE", `ค่าส่งรถ ${(delivery.distanceMeters / 1000).toFixed(1)} กม.`, 1, money.delivery, money.delivery, null]] : []),
+        ...(money.returnPickup ? [["RETURN_FEE", `ค่ารับรถคืน ${(collect.distanceMeters / 1000).toFixed(1)} กม.`, 1, money.returnPickup, money.returnPickup, null]] : []),
         ...(money.discount ? [["DISCOUNT", v.promo_name, 1, -money.discount, -money.discount, money.promotionId]] : []),
         ...(money.tax ? [["TAX", "VAT", 1, money.tax, money.tax, null]] : []),
       ];
@@ -264,18 +282,20 @@ export async function createBooking(auth, input, ctx) {
         booking: { pickupAt, returnAt, rentalDays: days, areaOfUse: input.areaOfUse, purpose: input.rentalPurpose },
         money,
         delivery: deliveryAddress,
+        returnPlace: returnAddress,
       });
       await issueContract(db, { bookingId: booking.id, userId, contractNumber, snapshot });
 
       await emit(db, booking.id, "booking.created", { bookingNumber: booking.booking_number, totalMinor: money.total });
       await recordAudit(db, ctx, { action: "booking.created", entityType: "booking", entityId: booking.id,
-        after: { vehicle: v.slug, pickupAt, returnAt, total: money.total, fulfillment: input.fulfillment,
+        after: { vehicle: v.slug, pickupAt, returnAt, total: money.total, fulfillment: input.fulfillment, returnType,
+          bookedByStaff: opts.staff?.user.id ?? null,
           termsAcknowledged: input.termsLocale ? { locale: input.termsLocale, at: now } : null } });
       return booking.booking_number;
     },
-    { actorId: auth.user.id },
+    { actorId: opts.staff?.user.id ?? auth.user.id },
   );
-  return getBooking(auth, result);
+  return getBooking(opts.staff ?? auth, result);
 }
 
 // ---------------------------------------------------------------- read
@@ -338,6 +358,14 @@ export function bookingDto(r) {
       image: r.image_url ? { url: r.image_url, variants: r.image_variants } : null,
     },
     customer: { fullName: r.legal_full_name, phone: r.customer_phone, country: r.customer_country },
+    returnPlace: {
+      type: r.return_type ?? "BRANCH",
+      address: r.return_address?.address ?? null, notes: r.return_address?.notes ?? null,
+      lat: r.return_address?.lat ?? null, lng: r.return_address?.lng ?? null,
+      distanceMeters: r.return_distance_m, durationSeconds: r.return_duration_s,
+      mapsUrl: r.return_address ? navigationUrl({ lat: r.branch_lat, lng: r.branch_lng }, r.return_address) : null,
+    },
+    bookedByStaff: Boolean(r.created_by_staff),
     delivery: r.fulfillment_type === "DELIVERY"
       ? {
           address: r.delivery_address?.address, notes: r.delivery_address?.notes, lat: r.delivery_address?.lat, lng: r.delivery_address?.lng,
@@ -412,7 +440,8 @@ export async function uploadDocument(auth, number, kind, { body, ext, contentTyp
   return withTransaction(
     async (db) => {
       const b = await loadBooking(db, number, auth, { lock: true });
-      if (b.user_id !== auth.user.id) throw Forbidden("Only the renter can upload documents");
+      // the renter, or staff who may see identity documents (booking on the customer's behalf)
+      if (b.user_id !== auth.user.id && !auth.permissions?.has("users:read_sensitive")) throw Forbidden("Only the renter can upload documents");
       if (!DOCS_OPEN.includes(b.status)) throw Conflict("DOCUMENTS_CLOSED", "This booking no longer accepts documents");
       if (!b.customer_identity_id) throw BadRequest("This booking has no renter details");
       if (!allowedKinds(b.id_document_type).includes(kind)) throw BadRequest("This document is not needed for this ID type");
@@ -748,20 +777,95 @@ export async function confirmPaymentTx(
   const { rows: bRows } = await db.query("SELECT id, status, user_id, booking_number FROM bookings WHERE id = $1 FOR UPDATE", [p.booking_id]);
   const b = bRows[0];
   if (b.status === "PENDING") {
-    await db.query("UPDATE bookings SET status = 'CONFIRMED' WHERE id = $1", [b.id]);
-    await emit(db, b.id, "booking.confirmed", { bookingNumber: b.booking_number, paymentId: p.id });
-    // The confirmation carries the full summary (as the shop used to type it in the chat).
-    const { rows: full } = await db.query(`${BOOKING_SELECT} WHERE b.id = $1`, [b.id]);
-    await notify(db, b.user_id, {
-      type: "BOOKING_CONFIRMED", bookingId: b.id,
-      title: "ชำระเงินสำเร็จ ยืนยันการจองแล้ว ขอบคุณที่ใช้บริการ Coolkids",
-      body: `เลขที่การจอง ${b.booking_number}\n\n${bookingSummaryText(full[0])}\n\nสัญญาเช่า (PDF) ดาวน์โหลดได้จากลิงก์ด้านล่าง`,
-    });
+    await confirmBookingTx(db, b, p.id);
   } else {
     // Paid after the hold lapsed: money is in, car may be gone → staff must refund or rebook.
     await emit(db, b.id, "payment.needs_review", { bookingNumber: b.booking_number, paymentId: p.id, bookingStatus: b.status });
   }
   return { bookingNumber: b.booking_number };
+}
+
+/** PENDING → CONFIRMED, and the customer gets the full summary (as the shop used to type it in the chat). */
+async function confirmBookingTx(db, b, paymentId = null, title = "ชำระเงินสำเร็จ ยืนยันการจองแล้ว ขอบคุณที่ใช้บริการ Coolkids") {
+  await db.query("UPDATE bookings SET status = 'CONFIRMED' WHERE id = $1", [b.id]);
+  await emit(db, b.id, "booking.confirmed", { bookingNumber: b.booking_number, paymentId });
+  const { rows: full } = await db.query(`${BOOKING_SELECT} WHERE b.id = $1`, [b.id]);
+  await notify(db, b.user_id, {
+    type: "BOOKING_CONFIRMED", bookingId: b.id,
+    title,
+    body: `เลขที่การจอง ${b.booking_number}\n\n${bookingSummaryText(full[0])}\n\nสัญญาเช่า (PDF) ดาวน์โหลดได้จากลิงก์ด้านล่าง`,
+  });
+}
+
+// ---------------------------------------------------------------- booked by staff (back office)
+
+/** The customer's account: by their e-mail, else one keyed by their phone number (walk-in / phone customers). */
+async function customerAccount(email, c) {
+  const key = (email ?? `phone-${c.phone.replace(/\D/g, "")}@walkin.coolkids.local`).toLowerCase();
+  return withTransaction(async (db) => {
+    const { rows } = await db.query("SELECT id, email, full_name FROM users WHERE email = $1 AND deleted_at IS NULL", [key]);
+    if (rows[0]) return rows[0];
+    const { rows: made } = await db.query(
+      "INSERT INTO users (email, full_name, phone) VALUES ($1, $2, $3) RETURNING id, email, full_name",
+      [key, c.fullName, c.phone],
+    );
+    return made[0];
+  });
+}
+
+/**
+ * Back office: staff fill in the booking for a customer (by phone, LINE chat, walk-in).
+ * Same checks, pricing and car hold as the customer's own form; the booking belongs
+ * to the customer's account so it shows up when they sign in with that e-mail.
+ */
+export async function createStaffBooking(staff, input, ctx) {
+  const { customerEmail, ...booking } = input;
+  const customer = await customerAccount(customerEmail, booking.customer);
+  const asCustomer = { user: customer, roles: [], permissions: new Set() };
+  return createBooking(asCustomer, { ...booking, contactEmail: booking.contactEmail ?? customerEmail }, ctx, { staff });
+}
+
+/**
+ * Staff confirm a booking the customer paid for outside the system (cash, bank transfer):
+ * documents must be attached; what was received is recorded as a payment (0 = nothing yet),
+ * and the booking is confirmed at once without the online payment step.
+ */
+export async function confirmOffline(staff, number, { paidMinor, method, note }, ctx) {
+  await withTransaction(
+    async (db) => {
+      const b = await loadBooking(db, number, staff, { lock: true });
+      if (b.status !== "PENDING") throw Conflict("BOOKING_NOT_PENDING", "การจองนี้ยืนยันไปแล้ว หรือถูกยกเลิก / หมดเวลา");
+      if (!documentsDto(b).complete) throw Conflict("DOCUMENTS_REQUIRED", "แนบรูปบัตรและใบขับขี่ของผู้ขับคนที่ 1 ให้ครบก่อนยืนยัน");
+      if (paidMinor > Number(b.total_minor) + Number(b.deposit_minor)) throw BadRequest("ยอดที่รับมากกว่ายอดรวมของการจอง");
+      await db.query(
+        `UPDATE bookings SET review_status = 'APPROVED', submitted_at = COALESCE(submitted_at, now()),
+                approved_at = now(), approved_by = $2, review_note = $3 WHERE id = $1`,
+        [b.id, staff.user.id, note ?? null],
+      );
+      let paymentId = null;
+      if (paidMinor > 0) {
+        // 'offline' (not 'counter'): money taken before hand-over, so the hand-over screen still collects the rest
+        const { rows } = await db.query(
+          `INSERT INTO payments (booking_id, user_id, purpose, provider, provider_payment_id, amount_minor, currency, status,
+                                 succeeded_at, payment_method_type, idempotency_key)
+           VALUES ($1, $2, 'RENTAL', 'offline', $3, $4, $5, 'SUCCEEDED', now(), $6, $7) RETURNING id`,
+          [b.id, b.user_id, `offline_${randomUUID()}`, paidMinor, b.currency, method, randomUUID()],
+        );
+        paymentId = rows[0].id;
+        await db.query(
+          `INSERT INTO payment_transactions (payment_id, transaction_type, status, amount_minor, currency, provider_response)
+           VALUES ($1, 'CAPTURE', 'SUCCEEDED', $2, $3, $4)`,
+          [paymentId, paidMinor, b.currency, JSON.stringify({ recordedBy: staff.user.id, method, note: note ?? null })],
+        );
+      }
+      await confirmBookingTx(db, b, paymentId, "ยืนยันการจองแล้ว ขอบคุณที่ใช้บริการ Coolkids");
+      await recordAudit(db, ctx, {
+        action: "booking.confirmed_offline", entityType: "booking", entityId: b.id, after: { paidMinor, method, note: note ?? null },
+      });
+    },
+    { actorId: staff.user.id },
+  );
+  return getBooking(staff, number);
 }
 
 export async function failPayment(paymentId, reason) {

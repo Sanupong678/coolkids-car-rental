@@ -34,7 +34,7 @@ export async function publishedTemplate(db) {
 }
 
 /** Frozen merge data. Document numbers are masked: the snapshot never holds them in clear. */
-export function buildSnapshot({ company, contractNumber, issuedAt, customer, vehicle, booking, money, delivery }) {
+export function buildSnapshot({ company, contractNumber, issuedAt, customer, vehicle, booking, money, delivery, returnPlace = null }) {
   return {
     company,
     contract: { number: contractNumber, issuedDate: fmtDate(issuedAt) },
@@ -63,12 +63,14 @@ export function buildSnapshot({ company, contractNumber, issuedAt, customer, veh
       days: booking.rentalDays,
       area: booking.areaOfUse ?? (delivery?.address ? `${delivery.address} (ส่งรถถึงที่ / Delivery)` : `${vehicle.location_name}, ${vehicle.location_city}`),
       purpose: booking.purpose ?? null,
+      returnPlace: returnPlace?.address ? `${returnPlace.address} (รับรถคืนถึงที่ / Collected)` : `${vehicle.location_name}`,
       executedAt: `${vehicle.location_name} (ทำสัญญาออนไลน์ / signed online)`,
     },
     money: {
       rental: baht(money.rental),
       deposit: baht(money.deposit),
-      delivery: baht(money.delivery),
+      // the contract's one box covers both trips: delivering the car and collecting it
+      delivery: baht(money.delivery + (money.returnPickup ?? 0)),
       discount: money.discount ? `−${baht(money.discount)}` : "—",
       paidOnline: baht(money.dueNow ?? money.total),
       totalPayable: baht(money.total + money.deposit),

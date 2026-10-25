@@ -75,7 +75,7 @@ export default {
     },
     loc: {
       title: 'รับรถที่ดอนเมือง หรือส่งถึงที่',
-      sub: 'ส่งฟรีในระยะ 5 กม. · เกินจากนั้น 20 บาท/กม. (ขั้นต่ำ 100 บาท)',
+      sub: 'มีบริการรับส่งถึงบ้านคุณ (คิดตามระยะทาง)',
       hours: 'เวลาทำการ',
       everyday: 'ทุกวัน {h} น.',
       delivery: 'บริการส่งรถ',
@@ -161,7 +161,7 @@ export default {
     },
     loc: {
       title: 'Pick up at Don Mueang, or we deliver',
-      sub: 'Free delivery within 5 km · 20 THB/km beyond (minimum 100 THB)',
+      sub: 'Delivery and pick-up at your door (priced by distance)',
       hours: 'Opening hours',
       everyday: 'Every day {h}',
       delivery: 'Delivery',
@@ -258,7 +258,7 @@ export default {
     },
     loc: {
       title: '廊曼取车，或送车上门',
-      sub: '5 公里内免费送车 · 超出部分每公里 20 泰铢（最低 100 泰铢）',
+      sub: '提供送车上门及上门取车服务（按距离计费）',
       hours: '营业时间',
       everyday: '每天 {h}',
       delivery: '送车服务',

@@ -79,7 +79,7 @@ export function tripSection(b) {
   const car = [b.brand, b.model].filter(Boolean).join(" ");
   const sub = [b.trim, b.model_year].filter(Boolean).join(" · ");
   const place = b.fulfillment_type === "DELIVERY" ? `ส่งถึงที่: ${b.delivery_address?.address ?? "-"}` : `รับที่สาขา ${b.branch_name ?? ""}`;
-  const back = b.fulfillment_type === "DELIVERY" ? "รับรถคืนที่เดิม" : `คืนที่สาขา ${b.branch_name ?? ""}`;
+  const back = b.return_type && b.return_type !== "BRANCH" ? `รับรถคืนที่: ${b.return_address?.address ?? "-"}` : `คืนที่สาขา ${b.branch_name ?? ""}`;
   const stop = (marker, when, where, last) => `<tr>
 <td style="width:22px;vertical-align:top;padding-top:4px"><div style="width:12px;height:12px;${marker};background:#111;margin:0 auto"></div>${
     last ? "" : `<div style="width:2px;height:54px;background:#111;margin:2px auto 0"></div>`
@@ -109,7 +109,8 @@ export function priceSection(b) {
     `<tr><td colspan="2" style="height:1px;background:#ececec;padding:0"></td></tr>`,
     line(`ค่าเช่า ${thb(p.daily ?? 0)} × ${esc(b.rental_days ?? 0)} วัน`, thb(p.rental ?? 0)),
     ...(Number(p.discount) ? [line("ส่วนลด", `−${thb(p.discount)}`, { green: true })] : []),
-    ...(Number(p.delivery) ? [line("ค่าบริการรับส่งรถ", thb(p.delivery))] : []),
+    ...(Number(p.delivery) ? [line("ค่าบริการส่งรถ", thb(p.delivery))] : []),
+    ...(Number(p.returnPickup) ? [line("ค่าบริการรับรถคืน", thb(p.returnPickup))] : []),
     line("เงินประกัน (ได้คืนหลังคืนรถ)", thb(deposit)),
   ];
   // waiting for the reservation fee: show what to transfer now

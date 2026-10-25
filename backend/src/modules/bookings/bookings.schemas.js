@@ -14,13 +14,15 @@ export const deliveryInput = z
   })
   .refine((d) => d.placeId || d.address || (d.lat != null && d.lng != null), { message: "Address required", path: ["address"] });
 
-export const createBookingSchema = z
-  .object({
+const bookingFields = z.object({
     vehicleSlug: z.string().regex(/^[a-z0-9-]+$/).max(120),
     pickupAt: z.iso.datetime({ offset: true }),
     returnAt: z.iso.datetime({ offset: true }),
     fulfillment: z.enum(["BRANCH_PICKUP", "DELIVERY"]),
     delivery: deliveryInput.optional(),
+    // where the car goes back: the branch (free), the delivery address, or another address (priced by distance)
+    returnType: z.enum(["BRANCH", "SAME_AS_DELIVERY", "ADDRESS"]).default("BRANCH"),
+    returnAddress: deliveryInput.optional(),
     notes: z.string().trim().max(500).optional(),
     // LINE flow extras (old chat form): where the car is used, where the renter stays, their Facebook / IG.
     areaOfUse: z.string().trim().min(2).max(120).optional(),
@@ -45,12 +47,33 @@ export const createBookingSchema = z
     }),
     // Both must be "yes" for insurance to apply (contract page 1).
     declarations: z.object({ hasOriginalLicense: z.literal(true), infoMatchesLicense: z.literal(true) }),
-  })
-  .refine((b) => b.fulfillment !== "DELIVERY" || b.delivery, { message: "Delivery address required", path: ["delivery"] })
-  .refine((b) => b.customer.idType !== "NATIONAL_ID" || b.customer.countryCode !== "TH" || /^\d{13}$/.test(b.customer.idNumber.replace(/[ -]/g, "")), {
-    message: "Thai ID card number must be 13 digits",
-    path: ["customer", "idNumber"],
-  });
+});
+
+/** The rules every booking form obeys, for the customer's form and the staff one. */
+const bookingRules = (schema) =>
+  schema
+    .refine((b) => b.fulfillment !== "DELIVERY" || b.delivery, { message: "Delivery address required", path: ["delivery"] })
+    .refine((b) => b.returnType !== "ADDRESS" || b.returnAddress, { message: "Return address required", path: ["returnAddress"] })
+    .refine((b) => b.returnType !== "SAME_AS_DELIVERY" || b.fulfillment === "DELIVERY", {
+      message: "Return to the delivery address needs a delivery", path: ["returnType"],
+    })
+    .refine((b) => b.customer.idType !== "NATIONAL_ID" || b.customer.countryCode !== "TH" || /^\d{13}$/.test(b.customer.idNumber.replace(/[ -]/g, "")), {
+      message: "Thai ID card number must be 13 digits",
+      path: ["customer", "idNumber"],
+    });
+
+export const createBookingSchema = bookingRules(bookingFields);
+
+// Staff booking on a customer's behalf (back office): the customer's e-mail finds or
+// makes their account; without one the booking goes on an account keyed by their phone.
+export const staffBookingSchema = bookingRules(bookingFields.extend({ customerEmail: z.email().max(254).optional() }));
+
+// Staff confirm a booking paid outside the system (cash / transfer): no online payment step.
+export const offlineConfirmSchema = z.object({
+  paidMinor: z.number().int().min(0).max(100_000_000),
+  method: z.enum(["cash", "transfer"]),
+  note: z.string().trim().max(300).optional(),
+});
 
 export const signSchema = z.object({
   accepted: z.literal(true),

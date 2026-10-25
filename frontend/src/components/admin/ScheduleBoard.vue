@@ -2,7 +2,9 @@
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { getSchedule } from '@/api/admin'
+import { getVehicle } from '@/api/catalogue'
 import Icon from '@/components/ui/Icon.vue'
+import BookingModal from '@/components/booking/BookingModal.vue'
 
 // "ปฏิทินการจอง": every car on a row, days across, each booking a bar coloured
 // by where it stands (awaiting approval · to hand over · on rent · deposit to
@@ -79,6 +81,27 @@ const label = (b) => `${b.customer ?? ''} ${b.review === 'SUBMITTED' ? 'รอ�
 const openBooking = (b) => router.push({ query: { tab: 'operations', booking: b.number } })
 const shift = (n) => (from.value = addDays(from.value, n))
 const goToday = () => (from.value = addDays(iso(new Date()), -7))
+
+// "จองให้ลูกค้า": staff key in a booking for a customer who books by phone / LINE / walk-in.
+const pickSlug = ref('')
+const staffCar = ref(null)
+const opening = ref(false)
+async function bookFor() {
+  if (!pickSlug.value || opening.value) return
+  opening.value = true
+  error.value = ''
+  try {
+    staffCar.value = await getVehicle(pickSlug.value)
+  } catch (err) {
+    error.value = err.message
+  } finally {
+    opening.value = false
+  }
+}
+function closeStaff() {
+  staffCar.value = null
+  load()
+}
 </script>
 
 <template>
@@ -87,6 +110,13 @@ const goToday = () => (from.value = addDays(iso(new Date()), -7))
       <div>
         <h2>ปฏิทินการจอง</h2>
         <p>แต่ละแถวคือรถหนึ่งคัน · กดแถบเพื่อเปิดการจองนั้นในหน้างานส่งรถ</p>
+      </div>
+      <div class="book-for">
+        <select v-model="pickSlug" aria-label="เลือกรถ">
+          <option value="">เลือกรถ…</option>
+          <option v-for="c in data?.cars ?? []" :key="c.id" :value="c.slug">{{ c.fleetNo ? `${c.fleetNo} · ` : '' }}{{ c.name }} ({{ c.plate }})</option>
+        </select>
+        <button type="button" class="add" :disabled="!pickSlug || opening" @click="bookFor">+ จองให้ลูกค้า</button>
       </div>
       <div class="nav">
         <button type="button" aria-label="ย้อนกลับ 2 สัปดาห์" @click="shift(-14)"><Icon name="chevron-left" :size="16" /></button>
@@ -147,6 +177,7 @@ const goToday = () => (from.value = addDays(iso(new Date()), -7))
       <span><i class="deposit" /> รอคืนมัดจำ</span>
       <span><i class="maint" /> ซ่อมบำรุง</span>
     </footer>
+    <BookingModal v-if="staffCar" :vehicle="staffCar" staff @close="closeStaff" />
   </section>
 </template>
 
@@ -380,5 +411,33 @@ header p {
   .car img {
     display: none;
   }
+}
+
+.book-for {
+  display: flex;
+  gap: 6px;
+  margin-left: auto;
+}
+.book-for select {
+  max-width: 260px;
+  padding: 8px 10px;
+  border: 1px solid #e3e4e8;
+  border-radius: 10px;
+  font: inherit;
+  font-size: 0.85rem;
+}
+.book-for .add {
+  padding: 8px 14px;
+  border: 0;
+  border-radius: 10px;
+  background: #e2362c;
+  color: #fff;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.book-for .add:disabled {
+  opacity: 0.45;
+  cursor: default;
 }
 </style>

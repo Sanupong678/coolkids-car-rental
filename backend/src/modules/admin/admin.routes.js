@@ -17,6 +17,8 @@ import * as fleetops from "./fleetops.service.js";
 import * as accounts from "./accounts.service.js";
 import * as staffEmail from "../notifications/staff-recipients.js";
 import * as documents from "../bookings/documents.service.js";
+import * as bookings from "../bookings/bookings.service.js";
+import { numberParam, offlineConfirmSchema, staffBookingSchema } from "../bookings/bookings.schemas.js";
 import { PAGE_KEYS } from "../rbac/pages.js";
 import * as vehicles from "./vehicles.service.js";
 
@@ -201,6 +203,24 @@ export function adminRoutes() {
     async (req, res) => {
       await withPosition(req.auth, req.valid.body.location);
       res.json({ data: await dispatch.markArrived(req.auth, req.valid.params.id, auditContext(req)) });
+    },
+  );
+
+  // ---- booking on a customer's behalf (phone / LINE chat / walk-in), paid outside the system
+  router.post(
+    "/bookings",
+    requirePermission(P.BOOKINGS_WRITE, P.USERS_READ_SENSITIVE),
+    validate({ body: staffBookingSchema }),
+    async (req, res) => {
+      res.status(201).json({ data: await bookings.createStaffBooking(req.auth, req.valid.body, auditContext(req)) });
+    },
+  );
+  router.post(
+    "/bookings/:number/confirm-offline",
+    requirePermission(P.BOOKINGS_WRITE, P.USERS_READ_SENSITIVE, P.PAYMENTS_READ),
+    validate({ params: numberParam, body: offlineConfirmSchema }),
+    async (req, res) => {
+      res.json({ data: await bookings.confirmOffline(req.auth, req.valid.params.number, req.valid.body, auditContext(req)) });
     },
   );
 

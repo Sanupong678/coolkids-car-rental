@@ -365,7 +365,7 @@ async function seedHomepage(db) {
     }],
     ["reviews", "ลูกค้าพูดถึงเรา", null, {}],
     ["promo_band", "เช่ารายเดือน คุ้มกว่า", "รายวันเริ่มต้น 800 บาท · รายเดือนเริ่มต้น 15,000 บาท", { image: "/cars/corolla-cross-2000.webp", badge: { label: "รายเดือนเริ่มต้น", value: "15,000", unit: "บาท / เดือน" }, cta: { label: "สอบถามผ่าน LINE", href: LINE_URL } }],
-    ["locations_map", "รับรถที่ดอนเมือง หรือส่งถึงที่", "ส่งฟรีในระยะ 5 กม. · เกินจากนั้น 20 บาท/กม. (ขั้นต่ำ 100 บาท)", {}],
+    ["locations_map", "รับรถที่ดอนเมือง หรือส่งถึงที่", "มีบริการรับส่งถึงบ้านคุณ (คิดตามระยะทาง)", {}],
   ];
   let order = 0;
   for (const [type, title, subtitle, cfg] of sections) {
