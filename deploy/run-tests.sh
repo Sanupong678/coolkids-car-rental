@@ -27,8 +27,9 @@ docker run --rm --user root -v "$PWD/backend:/src:ro" -v "$vol:/w" "$image" sh -
 echo "2/3 starting a throwaway database on an internal network…"
 docker run -d --rm --name "$id-db" --network "$net" \
   -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD=test -e POSTGRES_DB=car_rental_test postgres:16-alpine >/dev/null
-for _ in $(seq 1 30); do
-  docker exec "$id-db" pg_isready -U postgres -d car_rental_test >/dev/null 2>&1 && break
+# the first start runs setup on a socket-only server, then restarts: wait for TCP
+for _ in $(seq 1 60); do
+  docker exec "$id-db" pg_isready -h 127.0.0.1 -U postgres -d car_rental_test >/dev/null 2>&1 && break
   sleep 1
 done
 

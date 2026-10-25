@@ -11,6 +11,8 @@
 
 {$SITE_DOMAIN} {
 	encode zstd gzip
+	# one Server header is enough, and it need not name the software
+	header -Server
 	reverse_proxy web:8080 {
 		# nginx reads the visitor's IP from here for its per-IP limits (see frontend/nginx.conf)
 		header_up X-Real-IP {client_ip}

@@ -1,0 +1,67 @@
+# On every push / pull request: backend tests against a throwaway PostgreSQL,
+# known-vulnerability audit, and a production build of the website.
+# Deploying stays manual (deploy/pack.sh → deploy/release.sh on the VPS).
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: car_rental_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres -d car_rental_test"
+          --health-interval 5s --health-retries 20
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      DB_HOST: localhost
+      DB_PORT: 5432
+      DB_USER: postgres
+      DB_PASSWORD: test
+      # throwaway values for the test run only
+      COOKIE_SECRET: ci-only-cookie-secret-0123456789abcdefghijklmnopqrstuv
+      PII_ENCRYPTION_KEY: MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=
+      PII_HMAC_KEY: ci-only-hmac-key-0123456789abcdefghijklmnopqrstuvwxyz
+      CHROME_PATH: /usr/bin/google-chrome
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+      - name: Thai fonts for the contract PDFs (Chrome is preinstalled on the runner)
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq fonts-thai-tlwg fonts-noto-core >/dev/null
+      - run: npm ci
+      - run: npm audit --omit=dev --audit-level=high
+      - run: npm test
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm audit --audit-level=high
+      - run: npm run build

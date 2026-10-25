@@ -24,6 +24,7 @@ services:
 
   api:
     build: ./backend
+    image: coolkids-api:latest # deploy/release.sh keeps the one before as :previous
     restart: unless-stopped
     env_file: ./backend/.env
     environment:
@@ -31,8 +32,9 @@ services:
       DB_HOST: db
       DB_PORT: 5432
       DB_NAME: car_rental
-      DB_USER: coolkids
-      DB_PASSWORD: ${DB_PASSWORD}
+      # the API's own login, not the database superuser (deploy/app-db-role.sql)
+      DB_USER: coolkids_app
+      DB_PASSWORD: ${DB_APP_PASSWORD:?set DB_APP_PASSWORD in .env}
     volumes:
       # Only used when S3_* (Cloudflare R2) is empty: photos, signatures, contract PDFs.
       - uploads:/app/uploads
@@ -45,6 +47,7 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile.prod
+    image: coolkids-web:latest
     restart: unless-stopped
     depends_on: [api]
     logging: *logging

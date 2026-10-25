@@ -183,16 +183,31 @@ npm --prefix backend run line:richmenu -- upload
 /opt/coolkids/deploy/backup-db.sh      # ลองครั้งแรก → /opt/coolkids/backups/db-YYYY-MM-DD.sql.gz
 ```
 
-เก็บไว้ 14 วันบนเครื่อง — แนะนำเปิด Snapshot/Backup อัตโนมัติของผู้ให้บริการ VPS ด้วย (กันเครื่องเสียทั้งเครื่อง)
-วิธีกู้คืนเขียนไว้หัวไฟล์ [`deploy/backup-db.sh`](../deploy/backup-db.sh)
+เก็บไว้ 14 วันบนเครื่อง (ไฟล์อ่านได้เฉพาะ root) และส่งสำเนาขึ้น R2 bucket ส่วนตัว `backups/db/` เก็บ 30 วัน
+วิธีกู้คืนเขียนไว้หัวไฟล์ [`deploy/backup-db.sh`](../deploy/backup-db.sh) · ทดสอบว่ากู้ได้จริง (ฐานข้อมูลชั่วคราว ไม่แตะของจริง) เดือนละครั้ง:
+
+```bash
+sh deploy/restore-test.sh
+```
 
 ## 9. อัปเดตเว็บครั้งต่อไป
 
 บนคอมเครื่องนี้: `sh deploy/pack.sh` แล้ว `scp coolkids.tgz root@14.207.142.106:/opt/coolkids/` จากนั้นบน VPS:
 
 ```bash
-cd /opt/coolkids && tar -xzf coolkids.tgz && docker compose -f docker-compose.prod.yml up -d --build
+cd /opt/coolkids && tar -xzf coolkids.tgz && rm coolkids.tgz
+sh deploy/run-tests.sh      # ชุดทดสอบ 103 ข้อ กับฐานข้อมูลทดสอบชั่วคราว (~2 นาที)
+sh deploy/release.sh        # build + restart, เก็บ image เดิมไว้เป็น :previous, ตรวจเว็บตอบ ถ้าไม่ตอบจะย้อนกลับเอง
 ```
+
+ถ้าเวอร์ชันใหม่มีปัญหา ย้อนกลับเวอร์ชันก่อนหน้าได้ทันที: `sh deploy/rollback.sh`
+(หรือ `sh deploy/rollback.sh 20261025-1240` สำหรับเวอร์ชันที่ระบุ · ดูรายการด้วย `docker images coolkids-api`)
+ถ้าเวอร์ชันนั้นมี migration ที่เปลี่ยนตาราง ต้องย้อน migration เองก่อน
+
+Load test (อ่านอย่างเดียว ไม่จองจริง, ~1 นาที): `docker run --rm -i grafana/k6 run - < deploy/load-test.js`
+
+API เชื่อมต่อฐานข้อมูลด้วย `coolkids_app` (ไม่ใช่ superuser, รหัสอยู่ใน `.env` → `DB_APP_PASSWORD`) ·
+`coolkids` (superuser) ใช้เฉพาะ backup/งานดูแล · ถ้าสร้างฐานข้อมูลใหม่ ให้รัน `deploy/app-db-role.sql` (วิธีใช้อยู่หัวไฟล์)
 
 `.env` ทั้งสองไฟล์และข้อมูลในฐานข้อมูลไม่ถูกแตะ · migration ใหม่รันเองตอน api เริ่ม ·
 ถ้าแก้รายการรถใน `seed-coolkids.js` ให้รันเพิ่ม: `docker compose -f docker-compose.prod.yml run --rm api node src/db/seed-coolkids.js`

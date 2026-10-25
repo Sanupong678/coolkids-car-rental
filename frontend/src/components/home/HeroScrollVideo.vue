@@ -26,6 +26,14 @@ const props = defineProps({
 })
 const { t, tc } = useI18n()
 
+// Phones get the 720p cut of the clip (<name>-mobile.mp4, ~2 MB instead of ~16 MB);
+// if a clip has no phone cut the full one loads instead.
+const phone = typeof window !== 'undefined' && window.matchMedia('(max-width: 760px)').matches
+const source = ref(phone && /\.mp4$/.test(props.src) ? props.src.replace(/\.mp4$/, '-mobile.mp4') : props.src)
+function onVideoError() {
+  if (source.value !== props.src) source.value = props.src
+}
+
 const END = 0.82 // share of the pinned scroll that plays the clip; the rest holds the last frame
 const reduced = typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches
 const root = ref(null)
@@ -137,7 +145,7 @@ const lines = () => tc(props.headline, 'hero.title').replace(/ (?=สำหร�
       <video
         ref="video"
         class="bg"
-        :src="props.src"
+        :src="source"
         :poster="props.poster"
         muted
         playsinline
@@ -145,6 +153,7 @@ const lines = () => tc(props.headline, 'hero.title').replace(/ (?=สำหร�
         disablepictureinpicture
         aria-hidden="true"
         tabindex="-1"
+        @error="onVideoError"
       />
       <span class="shade" aria-hidden="true" />
       </div>
