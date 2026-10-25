@@ -114,6 +114,53 @@ export function renderAdminBookingMail(b, photos) {
   return { subject, text, html, attachments };
 }
 
+/**
+ * Staff e-mail when a payment comes in through Stripe (card, Link, PromptPay QR): these leave
+ * no slip in the back office, so this is how the shop knows. Never throws.
+ */
+export async function mailAdminsPaymentReceived(paymentId) {
+  if (!config.mailConfigured || config.isTest) return;
+  try {
+    const to = await staffRecipients();
+    if (!to.length) return;
+    const { rows: pay } = await pool.query(
+      `SELECT p.booking_id, p.is_balance, p.payment_method_type, p.payment_method_last4,
+              p.amount_minor + COALESCE((SELECT sum(c.amount_minor) FROM payments c WHERE c.parent_payment_id = p.id), 0) AS charged_minor
+         FROM payments p WHERE p.id = $1`,
+      [paymentId],
+    );
+    if (!pay[0]) return;
+    const { rows } = await pool.query(`${BOOKING_SELECT} WHERE b.id = $1`, [pay[0].booking_id]);
+    const b = rows[0];
+    if (!b) return;
+    const what = pay[0].is_balance ? "ค่าเช่าและเงินประกัน" : "ค่าจอง";
+    const how = { promptpay: "PromptPay (Stripe)", card: `บัตร${pay[0].payment_method_last4 ? ` ลงท้าย ${pay[0].payment_method_last4}` : ""} (Stripe)`, link: "Stripe Link" }[pay[0].payment_method_type] ?? "Stripe";
+    const link = `${config.FRONTEND_URL}/admin?tab=operations&booking=${b.booking_number}`;
+    const subject = `[Coolkids] รับ${what}แล้ว ${baht(pay[0].charged_minor)} · ${b.booking_number} · ${b.legal_full_name ?? ""}`;
+    const rowsOut = [
+      ["money", "ยอดที่รับ", baht(pay[0].charged_minor)],
+      ["note", "รายการ", what],
+      ["money", "ช่องทาง", how],
+      ["user", "ลูกค้า", `${b.legal_full_name ?? "—"} · ${b.customer_phone ?? ""}`],
+      ["car", "รถ", [b.brand, b.model, b.license_plate].filter(Boolean).join(" ")],
+      ["calendar", "รับรถ", when(b.pickup_at)],
+    ];
+    const text = [`รับ${what}แล้ว: ${b.booking_number}`, "", ...rowsOut.map(([, k, v]) => `${k}: ${v}`), "", `เปิดในหลังบ้าน: ${link}`].join("\n");
+    const html = layout({
+      type: "STAFF_PAYMENT_RECEIVED",
+      title: `รับ${what}แล้ว`,
+      lead: `${b.legal_full_name ?? "ลูกค้า"} ชำระ${what} ${baht(pay[0].charged_minor)} ผ่าน ${how} เงินเข้าบัญชี Stripe แล้ว`,
+      booking: b,
+      staff: true,
+      sections: [infoRows(rowsOut)],
+      cta: { label: "เปิดการจองในหลังบ้าน", href: link },
+    });
+    for (const addr of to) await sendMail({ to: addr, subject, text, html });
+  } catch (err) {
+    logger.error({ err, paymentId }, "admin payment e-mail failed");
+  }
+}
+
 /** Sends the staff e-mail for one booking. Never throws: a mail problem must not fail the customer's submit. */
 export async function mailAdminsBookingSubmitted(number) {
   if (!config.mailConfigured || config.isTest) return;

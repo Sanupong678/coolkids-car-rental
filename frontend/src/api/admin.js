@@ -77,5 +77,6 @@ export const sendBookingDocument = (id, body) => api(`/admin/bookings/${id}/docu
 
 // Booking on a customer's behalf, paid outside the system.
 export const staffCreateBooking = (body) => postJson('/admin/bookings', body)
+export const balanceRefresh = (number) => postJson(`/admin/bookings/${number}/balance-refresh`, {})
 export const balanceLink = (number) => postJson(`/admin/bookings/${number}/balance-link`, {})
 export const confirmOffline = (number, body) => postJson(`/admin/bookings/${number}/confirm-offline`, body)

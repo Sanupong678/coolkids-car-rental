@@ -183,6 +183,20 @@ describe("rent balance + deposit paid online after confirmation", () => {
     assert.equal(l.depositHeldMinor, b.money.depositMinor);
   });
 
+  test("the operations board shows the balance paid through Stripe", async () => {
+    const board = (await admin.get("/api/v1/admin/operations").set("Origin", ORIGIN).expect(200)).body.data;
+    const row = Object.values(board.lists ?? {}).flat().find((x) => x.number === number);
+    assert.ok(row, "booking is on the board");
+    assert.equal(row.balance.payment.status, "SUCCEEDED");
+    assert.equal(row.ops.dueMinor, 0);
+    assert.equal(row.payment.amountMinor, 100_000, "the card's reservation fee is still the first payment");
+  });
+
+  test("refreshing an already-paid balance is harmless", async () => {
+    const res = await admin.post(`/api/v1/admin/bookings/${number}/balance-refresh`).set("Origin", ORIGIN).send({}).expect(200);
+    assert.deepEqual(res.body.data, { dueMinor: 0, paid: true });
+  });
+
   test("nothing left to pay: no new link", async () => {
     const res = await admin.post(`/api/v1/admin/bookings/${number}/balance-link`).set("Origin", ORIGIN).send({}).expect(409);
     assert.equal(res.body.error.code, "NOTHING_DUE");

@@ -30,6 +30,12 @@ const LIST_SELECT = `
                                    'succeededAt', p.succeeded_at, 'amountMinor', p.amount_minor)
             FROM payments p WHERE p.booking_id = b.id AND NOT p.is_balance AND p.parent_payment_id IS NULL
             ORDER BY (p.status = 'SUCCEEDED') DESC, p.created_at DESC LIMIT 1) AS payment,
+         (SELECT COALESCE(sum(p.amount_minor), 0) FROM payments p
+           WHERE p.booking_id = b.id AND p.purpose = 'RENTAL' AND p.status IN ('SUCCEEDED','PARTIALLY_REFUNDED','REFUNDED')) AS rent_paid_minor,
+         EXISTS (SELECT 1 FROM payments p WHERE p.booking_id = b.id AND p.purpose = 'DEPOSIT'
+                  AND p.status IN ('SUCCEEDED','PARTIALLY_REFUNDED','REFUNDED')) AS deposit_paid,
+         (SELECT json_build_object('status', p.status, 'succeededAt', p.succeeded_at, 'methodType', p.payment_method_type)
+            FROM payments p WHERE p.booking_id = b.id AND p.is_balance ORDER BY (p.status = 'SUCCEEDED') DESC, p.created_at DESC LIMIT 1) AS balance_payment,
          NULL AS timeline,
          (SELECT json_agg(json_build_object('type', i.item_type, 'description', i.description, 'quantity', i.quantity,
                                             'amountMinor', i.amount_minor) ORDER BY i.sort_order)

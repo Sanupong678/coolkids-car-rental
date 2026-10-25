@@ -14,7 +14,7 @@ import * as maps from "../maps/maps.service.js";
 import { queueEmail } from "../notifications/email.service.js";
 import { queueLine } from "../notifications/line.service.js";
 import { bookingSummaries, bookingSummaryText } from "./summary.js";
-import { mailAdminsBookingSubmitted } from "./admin-mail.js";
+import { mailAdminsBookingSubmitted, mailAdminsPaymentReceived } from "./admin-mail.js";
 import { paymentProvider } from "../payments/providers.js";
 
 // Web booking flow (spec 1.8): details → contract → payment → tracking.
@@ -770,7 +770,10 @@ export async function startCheckout(auth, number, { locale }, ctx) {
  * return-page verification and retries can all call it safely.
  */
 export async function confirmPayment(paymentId, details = {}) {
-  return withTransaction((db) => confirmPaymentTx(db, paymentId, details));
+  const result = await withTransaction((db) => confirmPaymentTx(db, paymentId, details));
+  // Card / Stripe payments leave no slip in the back office: staff are told by e-mail.
+  if (!result.alreadyConfirmed) void mailAdminsPaymentReceived(paymentId);
+  return result;
 }
 
 /** confirmPayment inside the caller's transaction (the slip check records the slip and the payment together). */
@@ -972,16 +975,19 @@ export async function startBalanceCheckout(auth, number, { locale, byStaff = fal
     ...(due.deposit ? [{ name: "เงินประกัน (คืนภายใน 24 ชม. หลังคืนรถ)", amountMinor: due.deposit }] : []),
   ];
   const expiresAt = new Date(Date.now() + 23 * HOUR);
-  const checkout = await provider.createCheckout({
-    payment: { ...lead, amount_minor: totalMinor },
-    booking: { ...b, description: `${b.brand} ${b.model} · ค่าเช่าและเงินประกัน` },
-    lines,
-    customerEmail: b.contact_email ?? undefined,
-    successUrl: `${base}?paid=balance`,
-    cancelUrl: base,
-    expiresAt,
-    locale,
-  });
+  const charge = { ...lead, amount_minor: totalMinor };
+  const forBooking = { ...b, description: `${b.brand} ${b.model} · ค่าเช่าและเงินประกัน` };
+  let checkout;
+  try {
+    checkout = await provider.createCheckout({
+      payment: charge, booking: forBooking, lines,
+      customerEmail: b.contact_email ?? undefined,
+      successUrl: `${base}?paid=balance`, cancelUrl: base, expiresAt, locale,
+    });
+  } catch (err) {
+    await pool.query("UPDATE payments SET status = 'FAILED', failure_message = $2 WHERE id = $1 OR parent_payment_id = $1", [lead.id, err.message]);
+    throw err;
+  }
 
   await withTransaction(async (db) => {
     await db.query("UPDATE payments SET provider_payment_id = $2, status = 'REQUIRES_ACTION' WHERE id = $1", [lead.id, checkout.providerPaymentId]);
@@ -999,6 +1005,26 @@ export async function startBalanceCheckout(auth, number, { locale, byStaff = fal
     });
   });
   return { url: checkout.url, provider: provider.name, amountMinor: totalMinor, currency: b.currency, expiresAt };
+}
+
+/**
+ * Asks Stripe about the open balance checkout (the hand-over screen polls this), so the
+ * payment shows the moment the customer pays, even if the webhook is late.
+ */
+export async function refreshBalance(auth, number) {
+  const b = await loadBooking(pool, number, auth);
+  const { rows } = await pool.query(
+    `SELECT id, provider, provider_payment_id FROM payments
+      WHERE booking_id = $1 AND is_balance AND status = 'REQUIRES_ACTION' ORDER BY created_at DESC LIMIT 1`,
+    [b.id],
+  );
+  const p = rows[0];
+  if (p?.provider === "stripe" && p.provider_payment_id) {
+    const result = await paymentProvider().retrieve(p.provider_payment_id);
+    if (result.paid) await confirmPayment(p.id, result);
+  }
+  const after = await loadBooking(pool, number, auth);
+  return { dueMinor: balanceDue(after).rent + balanceDue(after).deposit, paid: after.balance_payment?.status === "SUCCEEDED" };
 }
 
 export async function failPayment(paymentId, reason) {

@@ -1,6 +1,6 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import { balanceLink, collectPayment, getLedger, returnDeposit } from '@/api/admin'
+import { balanceLink, balanceRefresh, collectPayment, getLedger, returnDeposit } from '@/api/admin'
 import { money } from '@/utils/format'
 import OpsDialog from './OpsDialog.vue'
 
@@ -53,6 +53,8 @@ async function makeLink() {
     link.value = await balanceLink(props.booking.number)
     clearInterval(poll)
     poll = setInterval(async () => {
+      // asks Stripe too, so the payment shows even before its webhook arrives
+      await balanceRefresh(props.booking.number).catch(() => {})
       l.value = await getLedger(props.booking.id).catch(() => l.value)
       if (collected.value) {
         clearInterval(poll)
@@ -118,7 +120,7 @@ const giveBack = () =>
             <input :value="link.url" readonly aria-label="ลิงก์ชำระเงิน" @focus="$event.target.select()" />
             <button type="button" @click="copyLink">{{ copied ? 'คัดลอกแล้ว' : 'คัดลอกลิงก์' }}</button>
           </div>
-          <small>ส่งลิงก์ทาง LINE ได้ · ใช้ได้ถึง {{ time(link.expiresAt) }} · ระบบตัดยอดเองเมื่อลูกค้าจ่ายสำเร็จ</small>
+          <small>ให้ลูกค้าสแกนด้วยกล้องมือถือ (ไม่ใช่แอปธนาคาร) จะเปิดหน้าชำระของ Stripe · ส่งลิงก์ทาง LINE ได้ · ใช้ได้ถึง {{ time(link.expiresAt) }} · ระบบตัดยอดเองเมื่อจ่ายสำเร็จ</small>
           <p class="wait"><span class="dot" /> รอลูกค้าชำระ…</p>
         </template>
         <button v-else type="button" class="stripe-btn" :disabled="busy" @click="makeLink">

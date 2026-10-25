@@ -117,6 +117,20 @@ const awaitsReview = (b) => b.status === 'PENDING' && ['SUBMITTED', 'CHANGES_REQ
 const dt = (iso) => new Date(iso).toLocaleString('th-TH', { timeZone: tz, day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })
 const time = (iso) => new Date(iso).toLocaleString('th-TH', { timeZone: tz, day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
 const clock = (iso) => new Date(iso).toLocaleTimeString('th-TH', { timeZone: tz, hour: '2-digit', minute: '2-digit' })
+
+// How the reservation fee came in: card payments leave no slip, so the card says it.
+const payHow = (p) =>
+  p.provider === 'stripe'
+    ? p.methodType === 'promptpay' ? 'ค่าจอง · PromptPay (Stripe)' : 'ค่าจอง · บัตร (Stripe)'
+    : p.provider === 'promptpay' ? 'ค่าจอง · โอน (สลิป)'
+    : p.provider === 'offline' ? 'ค่าจอง · รับนอกระบบ'
+    : 'ค่าจองชำระแล้ว'
+const feePaid = (b) => (b.payment?.status === 'SUCCEEDED' ? Number(b.payment.amountMinor) : 0)
+// rent + deposit paid by the customer through Stripe after confirmation
+const onlineBalance = (b) =>
+  b.balance?.payment?.status === 'SUCCEEDED'
+    ? Math.max(0, Number(b.ops?.paidOnlineMinor ?? 0) - feePaid(b)) + Number(b.ops?.depositCollectedMinor ?? 0)
+    : 0
 </script>
 
 <template>
@@ -167,15 +181,17 @@ const clock = (iso) => new Date(iso).toLocaleTimeString('th-TH', { timeZone: tz,
             <button type="button" :disabled="b.status === 'PENDING'" @click="open('ledger', b)"><Icon name="chart" :size="14" /> รายได้</button>
             <button type="button" :disabled="b.status === 'PENDING'" @click="open('mileage', b)"><Icon name="gauge" :size="14" /> ไมล์</button>
             <button v-if="b.contract" type="button" @click="open('contract', b)"><Icon name="printer" :size="14" /> เอกสาร</button>
-            <span v-if="b.ops?.paidOnlineMinor" class="fee">+{{ money(b.ops.paidOnlineMinor, b.money.currency) }}</span>
+            <span v-if="b.payment?.status === 'SUCCEEDED'" class="fee paid-how"><Icon name="check" :size="11" /> {{ payHow(b.payment) }}</span>
           </div>
           <div class="c-money">
             <span><small>ค่าเช่า:</small> <b>{{ money(b.money.totalMinor, b.money.currency) }}</b></span>
             <span><small>ค่ามัดจำ:</small> <b>{{ money(b.money.depositMinor, b.money.currency) }}</b></span>
-            <span v-if="b.ops?.paidOnlineMinor" class="paid"><small>เงินจอง:</small> <b>−{{ money(b.ops.paidOnlineMinor, b.money.currency) }}</b> <Icon name="check" :size="12" /></span>
+            <span v-if="feePaid(b)" class="paid"><small>เงินจอง:</small> <b>−{{ money(feePaid(b), b.money.currency) }}</b> <Icon name="check" :size="12" /></span>
+            <span v-if="onlineBalance(b)" class="paid"><small>จ่ายออนไลน์ (Stripe):</small> <b>−{{ money(onlineBalance(b), b.money.currency) }}</b> <Icon name="check" :size="12" /></span>
             <span v-if="b.ops?.paidCounterMinor" class="paid"><small>รับหน้าร้าน:</small> <b>−{{ money(b.ops.paidCounterMinor + b.ops.depositCollectedMinor, b.money.currency) }}</b></span>
             <span class="due"><small>เรียกเก็บ:</small> <b>{{ money(b.ops?.dueMinor ?? 0, b.money.currency) }}</b></span>
-            <span v-if="b.ops?.paidCounterMinor || b.ops?.depositCollectedMinor" class="badge"><Icon name="shield" :size="12" /> รับเงินค่าเช่าและมัดจำแล้ว</span>
+            <span v-if="b.balance?.payment?.status === 'SUCCEEDED'" class="badge ok"><Icon name="check" :size="12" /> ลูกค้าจ่ายครบแล้ว (Stripe)</span>
+            <span v-else-if="b.ops?.paidCounterMinor || b.ops?.depositCollectedMinor" class="badge"><Icon name="shield" :size="12" /> รับเงินค่าเช่าและมัดจำแล้ว</span>
             <span v-if="b.ops?.depositReturnedAt" class="badge ok"><Icon name="check" :size="12" /> คืนมัดจำแล้ว</span>
             <span v-else-if="b.status === 'COMPLETED' && b.ops?.depositCollectedMinor" class="badge warn">รอคืนมัดจำ</span>
           </div>
@@ -349,6 +365,14 @@ const clock = (iso) => new Date(iso).toLocaleTimeString('th-TH', { timeZone: tz,
   color: #ffd25e;
   font-size: 0.75rem;
   text-align: center;
+}
+.paid-how {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  color: #6ee7a0;
+  font-weight: 600;
 }
 .c-money span {
   display: flex;

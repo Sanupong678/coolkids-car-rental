@@ -231,7 +231,16 @@ export function adminRoutes() {
     validate({ params: numberParam }),
     async (req, res) => {
       const link = await bookings.startBalanceCheckout(req.auth, req.valid.params.number, { locale: "th", byStaff: true }, auditContext(req));
+      // the Stripe page URL: scanned with the phone camera, not a banking app
       res.json({ data: { ...link, qr: await QRCode.toDataURL(link.url, { margin: 1, width: 320 }) } });
+    },
+  );
+  router.post(
+    "/bookings/:number/balance-refresh",
+    requirePermission(P.BOOKINGS_WRITE, P.PAYMENTS_READ),
+    validate({ params: numberParam }),
+    async (req, res) => {
+      res.json({ data: await bookings.refreshBalance(req.auth, req.valid.params.number) });
     },
   );
 
