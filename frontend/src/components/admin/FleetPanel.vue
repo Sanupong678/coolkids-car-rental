@@ -35,7 +35,9 @@ const EMPTY = {
   deliveryFreeKm: null, deliveryPerKm: null, deliveryMinFee: null,
   fleetNo: null, // "#3" on the operations board and booking timeline; empty = next number
 }
+const headerH = ref(0)
 function edit(c) {
+  headerH.value = document.querySelector('header.header')?.offsetHeight ?? 0
   error.value = ''
   editing.value = c
     ? { ...EMPTY, ...c, daily: c.dailyRateMinor / 100, hourly: c.hourlyRateMinor ? c.hourlyRateMinor / 100 : null, deposit: c.depositMinor / 100, features: [...c.features], images: [...c.images], originalImages: c.images.join('|'),
@@ -164,7 +166,8 @@ const STATUS_CLASS = { ACTIVE: 'ok', DRAFT: 'muted', MAINTENANCE: 'warn', OUT_OF
     </div>
 
     <!-- editor drawer -->
-    <div v-if="editing" class="scrim" @click.self="editing = null">
+    <!-- starts below the site header: the admin page is its own layer, so the header would cover the editor's top -->
+    <div v-if="editing" class="scrim" :style="{ top: `${headerH}px` }" @click.self="editing = null">
       <form class="drawer" novalidate @submit.prevent="save">
         <header>
           <h3>{{ editing.id ? `แก้ไข ${editing.brand} ${editing.model}` : 'เพิ่มรถใหม่' }}</h3>
@@ -286,6 +289,7 @@ const STATUS_CLASS = { ACTIVE: 'ok', DRAFT: 'muted', MAINTENANCE: 'warn', OUT_OF
         <footer>
           <p v-if="error" class="err" role="alert">{{ error }}</p>
           <button v-if="editing.id" type="button" class="danger" @click="archive">ซ่อนรถถาวร</button>
+          <button type="button" class="cancel" :disabled="saving" @click="editing = null">ยกเลิก</button>
           <button type="submit" class="save" :disabled="saving || uploading">{{ saving ? 'กำลังบันทึก…' : 'บันทึก' }}</button>
         </footer>
       </form>
@@ -341,6 +345,16 @@ const STATUS_CLASS = { ACTIVE: 'ok', DRAFT: 'muted', MAINTENANCE: 'warn', OUT_OF
 }
 .save:disabled {
   opacity: 0.5;
+}
+.cancel {
+  height: 40px;
+  padding: 0 16px;
+  border: 1px solid var(--viz-border);
+  border-radius: 12px;
+  background: none;
+  color: var(--viz-text);
+  font-weight: 600;
+  cursor: pointer;
 }
 .table {
   overflow-x: auto;
@@ -486,6 +500,8 @@ td {
 .scroll {
   flex: 1;
   overflow-y: auto;
+  overflow-x: hidden;
+  grid-template-columns: minmax(0, 1fr); /* never wider than the drawer */
   padding: 16px 20px;
   display: grid;
   align-content: start;
@@ -502,11 +518,12 @@ h4 {
 }
 .g3 {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
 }
 label {
   display: grid;
+  min-width: 0;
   gap: 4px;
   font-size: 0.78rem;
   color: var(--viz-muted);
@@ -514,6 +531,8 @@ label {
 input,
 select,
 textarea {
+  width: 100%;
+  min-width: 0;
   min-height: 40px;
   padding: 6px 10px;
   border: 1px solid var(--viz-border);
@@ -726,7 +745,7 @@ textarea {
     min-width: 0;
   }
   .g3 {
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
   .shots {
     grid-template-columns: 1fr 1fr;
