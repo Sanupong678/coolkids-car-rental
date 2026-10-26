@@ -851,6 +851,8 @@ h1 {
   z-index: 1;
   width: 100%;
   margin: 0;
+  /* the cropped photo spills past its box (over the bottom bar on some screens): never catch clicks */
+  pointer-events: none;
   animation: drive 1.1s cubic-bezier(0.16, 0.84, 0.3, 1) 0.1s both;
 }
 /* .frame is the car's own box: cropped to the car (see measureCar), as wide as the stage
@@ -914,6 +916,8 @@ h1 {
 
 /* ---------- bottom bar ---------- */
 .bottom {
+  position: relative;
+  z-index: 2; /* above the car photo */
   display: flex;
   align-items: center;
   gap: var(--s-5);

@@ -376,18 +376,23 @@ async function copySummary() {
 
 <style scoped>
 .cancel-box {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
+  display: grid;
+  justify-items: center;
   gap: var(--s-3);
+  text-align: center;
 }
 .cancel-box p {
   color: var(--text-muted);
   font-size: var(--fs-sm);
 }
 .cancel-btn {
-  color: #a3221a;
+  min-width: 220px;
+  border-color: #c22a21;
+  background: #c22a21;
+  color: #fff;
+}
+.cancel-btn:hover {
+  background: #a3221a;
 }
 .cancel-box.done {
   background: #e6f6ee;
