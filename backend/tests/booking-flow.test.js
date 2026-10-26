@@ -133,12 +133,15 @@ describe("web booking: details → contract → payment → delivery", () => {
     assert.equal(enc.rows[0].id_document_number_last4, "0123");
   });
 
-  test("the contract shows the renter's details with document numbers masked", async () => {
+  test("the contract shows the renter's full document numbers; the stored snapshot keeps them masked", async () => {
     const res = await customer.get(`/api/v1/bookings/${number}/contract`).expect(200);
     assert.match(res.body.data.html, /Somchai Jaidee/);
     assert.match(res.body.data.html, /CK-002|HONDA/);
-    assert.ok(!res.body.data.html.includes("1234567890123"));
-    assert.match(res.body.data.html, /•+0123/);
+    assert.ok(res.body.data.html.includes("1234567890123"));
+    assert.ok(res.body.data.html.includes("DL998877"));
+    const { rows } = await pool.query("SELECT data_snapshot FROM contracts WHERE booking_id = $1", [bookingId]);
+    assert.ok(!JSON.stringify(rows[0].data_snapshot).includes("1234567890123"), "never stored in clear");
+    assert.match(rows[0].data_snapshot.renter.idDocMasked, /•+0123/);
   });
 
   test("an overlapping booking for the same car is refused", async () => {
@@ -288,11 +291,10 @@ describe("dispatch: calendar, drivers and the printable contract", () => {
     await customer.put("/api/v1/admin/staff/me/location").set("Origin", ORIGIN).send({ lat: 1, lng: 1 }).expect(403);
   });
 
-  test("the printable contract carries raw values and masked documents", async () => {
+  test("the printable contract carries raw values and the full document numbers", async () => {
     const p = (await admin.get(`/api/v1/admin/bookings/${bookingId}/contract-print`).expect(200)).body.data;
     assert.equal(p.renter.fullName, "Somchai Jaidee");
-    assert.match(p.renter.idMasked, /•+0123/);
-    assert.ok(!JSON.stringify(p).includes("1234567890123"));
+    assert.equal(p.renter.idMasked, "1234567890123");
     assert.equal(p.rental.fulfillment, "DELIVERY");
     assert.equal(p.money.totalMinor, p.money.rentalMinor + p.money.deliveryMinor - p.money.discountMinor);
     assert.equal(p.signature, null, "LINE bookings are signed on paper at pick-up");

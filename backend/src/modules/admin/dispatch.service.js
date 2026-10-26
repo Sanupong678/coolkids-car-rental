@@ -4,7 +4,7 @@ import { distanceMeters, minutesToDrive } from "../../shared/geo.js";
 import { getSettings } from "../../shared/settings.js";
 import { recordAudit } from "../audit/audit.service.js";
 import { navigationUrl, notify } from "../bookings/bookings.service.js";
-import { signatureDataUrl } from "../contracts/contracts.service.js";
+import { fullDocumentNumbers, signatureDataUrl } from "../contracts/contracts.service.js";
 
 // Dispatch planning for the dashboard: the month calendar of hand-overs, one
 // day's jobs with their drivers, who is free, where each driver is now, and the
@@ -299,7 +299,7 @@ export async function markArrived(auth, bookingId, ctx) {
 /**
  * Everything the printed rental agreement shows, as raw values so the page can
  * render it in Thai, English or Chinese. Document numbers come from the
- * contract snapshot, which only ever holds them masked.
+ * renter's encrypted identity, in full (the contract snapshot only holds them masked).
  */
 export async function contractPrint(bookingId) {
   const { rows } = await pool.query(
@@ -321,6 +321,7 @@ export async function contractPrint(bookingId) {
   if (!r) throw NotFound("Booking");
   const settings = await getSettings();
   const snap = r.data_snapshot ?? {};
+  const docs = await fullDocumentNumbers(pool, r.id);
   return {
     company: settings["company.legal"] ?? snap.company ?? null,
     bookingNumber: r.booking_number,
@@ -332,8 +333,9 @@ export async function contractPrint(bookingId) {
       address: snap.renter?.address ?? null,
       phone: snap.renter?.phone ?? null,
       idType: snap.renter?.idDocLabel?.includes("Passport") ? "PASSPORT" : "NATIONAL_ID",
-      idMasked: snap.renter?.idDocMasked ?? null,
-      licenseMasked: snap.renter?.licenseMasked ?? null,
+      // full numbers on the printed agreement (decrypted here, never stored in the snapshot)
+      idMasked: docs?.idDoc ?? snap.renter?.idDocMasked ?? null,
+      licenseMasked: docs?.license ?? snap.renter?.licenseMasked ?? null,
     },
     vehicle: { make: r.brand, model: [r.model, r.trim].filter(Boolean).join(" "), plate: r.license_plate, fuel: r.fuel_type },
     rental: {

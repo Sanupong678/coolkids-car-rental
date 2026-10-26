@@ -1,5 +1,5 @@
 import { AppError } from "../../shared/errors.js";
-import { sha256 } from "../../shared/crypto.js";
+import { decryptPII, sha256 } from "../../shared/crypto.js";
 import * as storage from "../../shared/storage.js";
 import { renderTemplate } from "./render.js";
 import { TEMPLATE } from "./coolkids-rental.template.js";
@@ -107,11 +107,36 @@ export async function signatureDataUrl(db, mediaId) {
   return file ? `data:image/png;base64,${file.body.toString("base64")}` : null;
 }
 
-/** Rendered contract HTML for display, with the stored signature image inlined. */
+/**
+ * The renter's full ID / passport and licence numbers for a booking, decrypted from
+ * its identity record. The shop wants them in full on the contract (owner decision
+ * 2026-10-26), but the stored snapshot keeps them masked, so they are only ever
+ * filled in at display / print time. null when they cannot be read.
+ */
+export async function fullDocumentNumbers(db, bookingId) {
+  const { rows } = await db.query(
+    `SELECT ci.id_document_number_enc, ci.license_number_enc
+       FROM bookings b JOIN customer_identities ci ON ci.id = b.customer_identity_id WHERE b.id = $1`,
+    [bookingId],
+  );
+  if (!rows[0]) return null;
+  try {
+    return { idDoc: decryptPII(rows[0].id_document_number_enc), license: decryptPII(rows[0].license_number_enc) };
+  } catch {
+    return null; // e.g. encrypted under a retired key: the masked numbers stay
+  }
+}
+
+/** Rendered contract HTML for display, with the stored signature image and the full document numbers inlined. */
 export async function renderContract(db, contract) {
   const { rows } = await db.query("SELECT body FROM contract_templates WHERE id = $1", [contract.template_id]);
   const snapshot = structuredClone(contract.data_snapshot);
   if (contract.signature_media_id) snapshot.signature.dataUrl = await signatureDataUrl(db, contract.signature_media_id);
+  const full = contract.booking_id ? await fullDocumentNumbers(db, contract.booking_id) : null;
+  if (full && snapshot.renter) {
+    snapshot.renter.idDocMasked = full.idDoc;
+    snapshot.renter.licenseMasked = full.license;
+  }
   return renderTemplate(rows[0].body, snapshot);
 }
 
