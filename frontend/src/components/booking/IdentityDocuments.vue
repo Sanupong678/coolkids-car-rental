@@ -6,7 +6,8 @@ import Icon from '@/components/ui/Icon.vue'
 import { useI18n } from '@/i18n'
 
 // Photos of the renter's ID / passport and driving licence. On a phone the
-// tiles open the camera; photos are shrunk in the browser, then stored in
+// tiles open the system picker (take a photo, or choose one from the photo
+// library / files: no `capture`, which would force the camera); photos are shrunk in the browser, then stored in
 // private storage. Thumbnails are fetched through the API (never a public URL).
 const props = defineProps({
   number: { type: String, required: true },
@@ -78,7 +79,6 @@ async function pick(kind, e) {
           v-if="editable"
           type="file"
           accept="image/jpeg,image/png,image/webp"
-          :capture="kind === 'reference' ? undefined : 'environment'"
           :disabled="busy !== null"
           @change="pick(kind, $event)"
         />

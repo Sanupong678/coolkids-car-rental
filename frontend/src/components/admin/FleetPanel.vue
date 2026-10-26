@@ -431,7 +431,8 @@ td {
 .scrim {
   position: fixed;
   inset: 0;
-  z-index: var(--z-modal);
+  /* above the admin tab bar (z-index 900 on phones), which would cover the Save button */
+  z-index: 1000;
   display: flex;
   justify-content: flex-end;
   background: rgb(4 6 14 / 0.55);
@@ -461,6 +462,7 @@ td {
 .drawer footer {
   flex-wrap: wrap;
   justify-content: flex-end;
+  padding-bottom: calc(16px + env(safe-area-inset-bottom));
   border-top: 1px solid var(--viz-grid);
   border-bottom: 0;
 }

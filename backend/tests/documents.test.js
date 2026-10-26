@@ -69,7 +69,7 @@ after(() => pool.end());
 describe("identity documents", () => {
   test("a new booking lists the photos it still needs", async () => {
     const b = (await renter.get(`/api/v1/bookings/${number}`).expect(200)).body.data;
-    assert.deepEqual(b.documents.required, ["id_front", "id_back", "license_front"]);
+    assert.deepEqual(b.documents.required, ["id_front", "license_front"]);
     assert.equal(b.documents.complete, false);
   });
 
@@ -79,14 +79,14 @@ describe("identity documents", () => {
     await renter.put(`/api/v1/bookings/${number}/documents/selfie`).set("Origin", ORIGIN).set("Content-Type", "image/png").send(png()).expect(400);
   });
 
-  test("the renter uploads all three; the booking is complete and the file is private", async () => {
-    for (const kind of ["id_front", "id_back", "license_front"]) {
+  test("the renter uploads both; the booking is complete and the file is private", async () => {
+    for (const kind of ["id_front", "license_front"]) {
       await renter.put(`/api/v1/bookings/${number}/documents/${kind}`).set("Origin", ORIGIN).set("Content-Type", "image/png").send(png()).expect(200);
     }
     const b = (await renter.get(`/api/v1/bookings/${number}`).expect(200)).body.data;
     assert.equal(b.documents.complete, true);
     const { rows } = await pool.query("SELECT is_private, storage_key FROM media WHERE storage_key LIKE 'identities/%'");
-    assert.equal(rows.length, 3);
+    assert.equal(rows.length, 2);
     assert.ok(rows.every((r) => r.is_private));
   });
 

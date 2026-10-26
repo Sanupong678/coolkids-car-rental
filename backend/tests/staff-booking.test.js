@@ -102,7 +102,7 @@ describe("staff booking on a customer's behalf, paid outside the system", () => 
   });
 
   test("staff attach the photos and confirm with the amount received: CONFIRMED, payment recorded", async () => {
-    for (const [i, kind] of ["id_front", "id_back", "license_front"].entries()) {
+    for (const [i, kind] of ["id_front", "license_front"].entries()) {
       await admin.put(`/api/v1/bookings/${number}/documents/${kind}`).set("Origin", ORIGIN).set("Content-Type", "image/png").send(tinyPng(30 + i)).expect(200);
     }
     const res = await admin.post(`/api/v1/admin/bookings/${number}/confirm-offline`).set("Origin", ORIGIN)
@@ -129,7 +129,7 @@ describe("staff booking on a customer's behalf, paid outside the system", () => 
     const res = await admin.post("/api/v1/admin/bookings").set("Origin", ORIGIN)
       .send(bookingBody({ pickupAt: inDays(30), returnAt: inDays(32), customer: { ...bookingBody().customer, phone: "0811112222" } })).expect(201);
     const n = res.body.data.number;
-    for (const [i, kind] of ["id_front", "id_back", "license_front"].entries()) {
+    for (const [i, kind] of ["id_front", "license_front"].entries()) {
       await admin.put(`/api/v1/bookings/${n}/documents/${kind}`).set("Origin", ORIGIN).set("Content-Type", "image/png").send(tinyPng(40 + i)).expect(200);
     }
     const ok = await admin.post(`/api/v1/admin/bookings/${n}/confirm-offline`).set("Origin", ORIGIN).send({ paidMinor: 0, method: "cash" }).expect(200);
@@ -149,7 +149,7 @@ describe("rent balance + deposit paid online after confirmation", () => {
     const res = await admin.post("/api/v1/admin/bookings").set("Origin", ORIGIN)
       .send(bookingBody({ pickupAt: inDays(40), returnAt: inDays(42), customerEmail: "balance@example.com", customer: { ...bookingBody().customer, phone: "0822223333" } })).expect(201);
     number = res.body.data.number;
-    for (const [i, kind] of ["id_front", "id_back", "license_front"].entries()) {
+    for (const [i, kind] of ["id_front", "license_front"].entries()) {
       await admin.put(`/api/v1/bookings/${number}/documents/${kind}`).set("Origin", ORIGIN).set("Content-Type", "image/png").send(tinyPng(50 + i)).expect(200);
     }
     b = (await admin.post(`/api/v1/admin/bookings/${number}/confirm-offline`).set("Origin", ORIGIN).send({ paidMinor: 100_000, method: "transfer" }).expect(200)).body.data;

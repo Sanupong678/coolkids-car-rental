@@ -457,7 +457,9 @@ export const DOCUMENT_KINDS = {
   reference: { attachment: true, label: "เอกสารอ้างอิง (ตั๋วเครื่องบิน / ที่พัก / ใบส่งซ่อม)" },
 };
 const OPTIONAL_KINDS = ["driver2_id", "driver2_license", "reference"];
-const requiredKinds = (idType) => (idType === "PASSPORT" ? ["id_front", "license_front"] : ["id_front", "id_back", "license_front"]);
+// Front of the ID card / passport + driving licence (the back of a Thai ID card is not asked for:
+// owner decision 2026-10-26; old id_back photos stay readable).
+const requiredKinds = () => ["id_front", "license_front"];
 const allowedKinds = (idType) => [...requiredKinds(idType), ...OPTIONAL_KINDS];
 
 const mediaIdOf = (r, kind) => (DOCUMENT_KINDS[kind].attachment ? r.attachments?.[kind] : r[DOCUMENT_KINDS[kind].column]) ?? null;
