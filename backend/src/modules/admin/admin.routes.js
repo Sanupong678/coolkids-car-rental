@@ -8,6 +8,7 @@ import { PERMISSIONS as P } from "../rbac/permissions.js";
 import { BadRequest } from "../../shared/errors.js";
 import { IMAGE_TYPES, imageExtension } from "../../shared/images.js";
 import * as storage from "../../shared/storage.js";
+import { removeBackground } from "../../shared/remove-bg.js";
 import { auditContext } from "../audit/audit.service.js";
 import * as analytics from "./analytics.service.js";
 import * as dispatch from "./dispatch.service.js";
@@ -54,6 +55,9 @@ const vehicleBase = z.object({
   status: z.enum(["DRAFT", "ACTIVE", "MAINTENANCE", "OUT_OF_SERVICE"]),
   isFeatured: z.boolean(),
   imageUrl: z.string().regex(/^\/(uploads|cars)\/[\w./-]+$/).optional(),
+  // The whole photo set in display order; the first one is the cover. Replaces imageUrl when sent.
+  images: z.array(z.string().regex(/^\/(uploads|cars)\/[\w./-]+$/)).max(20)
+    .refine((a) => new Set(a).size === a.length, "Each photo only once").optional(),
   fleetNo: z.number().int().min(1).max(9999).nullable().optional(), // "#3" on the board and timeline
   // Delivery fee for this car; null = shop default.
   deliveryFreeKm: z.number().min(0).max(500).nullable().optional(),
@@ -528,20 +532,28 @@ export function adminRoutes() {
     res.json({ data: await vehicles.archive(req.auth, req.valid.params.id, auditContext(req)) });
   });
 
-  // ---- uploads: raw image body (Content-Type image/jpeg|png|webp), content-addressed file name
+  // ---- uploads: raw image body (Content-Type image/jpeg|png|webp), content-addressed file name.
+  // ?removeBg=1 cuts the background off first (rembg on this server) and stores the transparent PNG instead.
   router.post(
     "/uploads",
     requirePermission(P.VEHICLES_WRITE),
+    validate({ query: z.object({ removeBg: z.enum(["0", "1"]).default("0") }) }),
     express.raw({ type: Object.keys(IMAGE_TYPES), limit: "8mb" }),
     async (req, res) => {
-      const buf = req.body;
-      const ext = imageExtension(req.get("content-type"), buf);
+      let buf = req.body;
+      let type = req.get("content-type")?.split(";")[0];
+      let ext = imageExtension(type, buf);
       if (!ext) {
         throw BadRequest("Upload a JPEG, PNG or WebP image (max 8 MB)");
       }
+      const bgRemoved = req.valid.query.removeBg === "1";
+      if (bgRemoved) {
+        buf = await removeBackground(buf);
+        [type, ext] = ["image/png", "png"];
+      }
       const name = `${createHash("sha256").update(buf).digest("hex").slice(0, 32)}.${ext}`;
-      await storage.put("public", `vehicles/${name}`, buf, req.get("content-type").split(";")[0]);
-      res.status(201).json({ data: { url: `/uploads/vehicles/${name}`, bytes: buf.length } });
+      await storage.put("public", `vehicles/${name}`, buf, type);
+      res.status(201).json({ data: { url: `/uploads/vehicles/${name}`, bytes: buf.length, bgRemoved } });
     },
   );
 

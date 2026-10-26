@@ -9,6 +9,7 @@ coolkids.tgz
 !.env.example
 
 # Runtime files: uploaded car photos, ID documents, signatures, contract PDFs (PII)
+backend/.rembg/
 backend/uploads/
 backend/storage/
 backups/

@@ -2,6 +2,7 @@ import { config } from "./config/env.js";
 import { createApp } from "./app.js";
 import { pool } from "./db/pool.js";
 import { logger } from "./shared/logger.js";
+import { backgroundRemovalAvailable } from "./shared/remove-bg.js";
 import { expireStaleHolds } from "./modules/bookings/bookings.service.js";
 import { sendPendingEmail } from "./modules/notifications/email.service.js";
 import { sendPendingLine } from "./modules/notifications/line.service.js";
@@ -15,6 +16,9 @@ const server = app.listen(config.PORT, () => {
   if (!config.mapsConfigured) logger.warn("GOOGLE_MAPS_API_KEY not set — delivery ETA uses straight-line estimates");
   logger.info(`payment gateway: ${config.cardPaymentsEnabled ? config.paymentProvider : "cards off"}`);
   if (config.promptpayConfigured && !config.slipokConfigured) logger.warn("SLIPOK_* not set — PromptPay slips wait for a staff member to check them");
+  backgroundRemovalAvailable().then((ok) => {
+    if (!ok) logger.warn(`rembg not found (REMBG_PYTHON=${config.REMBG_PYTHON || "off"}) — car photos keep their background`);
+  });
   if (!config.lineMessagingConfigured) logger.warn("LINE_MESSAGING_ACCESS_TOKEN not set — no LINE push notifications");
 });
 

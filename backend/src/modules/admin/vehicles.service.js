@@ -1,4 +1,5 @@
 import { pool, withTransaction } from "../../db/pool.js";
+import { backgroundRemovalAvailable } from "../../shared/remove-bg.js";
 import { Conflict, Forbidden, NotFound } from "../../shared/errors.js";
 import * as storage from "../../shared/storage.js";
 import { feePolicy, getSettings } from "../../shared/settings.js";
@@ -28,6 +29,9 @@ const ADMIN_SELECT = `
   SELECT v.*, c.slug AS category_slug, c.name AS category_name,
          (SELECT m.file_url FROM vehicle_images vi JOIN media m ON m.id = vi.media_id
            WHERE vi.vehicle_id = v.id AND vi.role = 'PRIMARY' AND vi.deleted_at IS NULL LIMIT 1) AS image_url,
+         COALESCE((SELECT array_agg(m.file_url ORDER BY vi.role = 'PRIMARY' DESC, vi.sort_order, vi.created_at)
+                     FROM vehicle_images vi JOIN media m ON m.id = vi.media_id
+                    WHERE vi.vehicle_id = v.id AND vi.role <> 'SPIN_FRAME' AND vi.deleted_at IS NULL), '{}') AS images,
          COALESCE((SELECT array_agg(f.code ORDER BY f.code) FROM vehicle_features vf JOIN features f ON f.id = vf.feature_id
                     WHERE vf.vehicle_id = v.id), '{}') AS features,
          (SELECT count(*) FROM bookings b WHERE b.vehicle_id = v.id
@@ -42,7 +46,7 @@ const dto = (r) => ({
   torqueNm: r.torque_nm, fuelEconomy: r.fuel_economy_l_100km != null ? Number(r.fuel_economy_l_100km) : null, rangeKm: r.range_km,
   currency: r.currency, dailyRateMinor: r.daily_rate_minor, hourlyRateMinor: r.hourly_rate_minor, depositMinor: r.deposit_minor,
   minRentalDays: r.min_rental_days, maxRentalDays: r.max_rental_days, minDriverAge: r.min_driver_age,
-  status: r.status, isFeatured: r.is_featured, imageUrl: r.image_url, features: r.features,
+  status: r.status, isFeatured: r.is_featured, imageUrl: r.image_url, images: r.images, features: r.features,
   // null = the shop default delivery fee
   deliveryFreeKm: r.delivery_free_km != null ? Number(r.delivery_free_km) : null,
   deliveryPerKmMinor: r.delivery_per_km_minor, deliveryMinFeeMinor: r.delivery_min_fee_minor,
@@ -70,7 +74,10 @@ export async function meta() {
     pool.query("SELECT code, name, feature_group AS \"group\", icon FROM features ORDER BY feature_group, name"),
   ]);
   // The shop default delivery fee, shown as the placeholder of the per-car fields.
-  return { categories: cats.rows, locations: locs.rows, features: feats.rows, deliveryDefaults: feePolicy(await getSettings()) };
+  return {
+    categories: cats.rows, locations: locs.rows, features: feats.rows, deliveryDefaults: feePolicy(await getSettings()),
+    removeBg: await backgroundRemovalAvailable(),
+  };
 }
 
 async function categoryId(db, slug) {
@@ -79,13 +86,41 @@ async function categoryId(db, slug) {
   return rows[0].id;
 }
 
-async function setImage(db, vehicleId, url, alt, userId) {
+async function mediaId(db, url, alt, userId) {
   const { rows } = await db.query(
     `INSERT INTO media (media_type, storage_provider, storage_key, file_url, thumbnail_url, mime_type, file_size_bytes, alt_text, uploaded_by)
      VALUES ('IMAGE', $4, $1, $1, $1, 'image/*', 0, $2, $3)
      ON CONFLICT (storage_key) DO UPDATE SET alt_text = EXCLUDED.alt_text RETURNING id`,
     [url, alt, userId, url.startsWith("/uploads/") ? storage.driver : "local"],
   );
+  return rows[0].id;
+}
+
+// Replaces the car's photo set: `urls` in display order, the first is the cover.
+// Photos left out are soft-deleted; 360° spin frames are not touched.
+async function setImages(db, vehicleId, urls, alt, userId) {
+  const ids = [];
+  for (const url of urls) ids.push(await mediaId(db, url, alt, userId));
+  await db.query(
+    `UPDATE vehicle_images SET deleted_at = now()
+      WHERE vehicle_id = $1 AND role <> 'SPIN_FRAME' AND deleted_at IS NULL AND NOT (media_id = ANY($2::uuid[]))`,
+    [vehicleId, ids],
+  );
+  // Demote the old cover first: only one PRIMARY may be live at a time.
+  await db.query("UPDATE vehicle_images SET role = 'GALLERY' WHERE vehicle_id = $1 AND role = 'PRIMARY'", [vehicleId]);
+  for (const [i, id] of ids.entries()) {
+    await db.query(
+      `INSERT INTO vehicle_images (vehicle_id, media_id, role, sort_order) VALUES ($1, $2, $3, $4)
+       ON CONFLICT (vehicle_id, media_id) DO UPDATE
+         SET deleted_at = NULL, sort_order = EXCLUDED.sort_order,
+             role = CASE WHEN EXCLUDED.role = 'PRIMARY' THEN 'PRIMARY' ELSE vehicle_images.role END`, // keeps INTERIOR / DETAIL
+      [vehicleId, id, i === 0 ? "PRIMARY" : "GALLERY", i],
+    );
+  }
+}
+
+async function setImage(db, vehicleId, url, alt, userId) {
+  const rows = [{ id: await mediaId(db, url, alt, userId) }];
   await db.query(
     "UPDATE vehicle_images SET deleted_at = now() WHERE vehicle_id = $1 AND role = 'PRIMARY' AND deleted_at IS NULL AND media_id <> $2",
     [vehicleId, rows[0].id],
@@ -143,7 +178,8 @@ export async function create(auth, input, ctx) {
           WHERE v.id = $1`,
         [id],
       );
-      if (input.imageUrl) await setImage(db, id, input.imageUrl, `${input.brand} ${input.model}`, auth.user.id);
+      if (input.images) await setImages(db, id, input.images, `${input.brand} ${input.model}`, auth.user.id);
+      else if (input.imageUrl) await setImage(db, id, input.imageUrl, `${input.brand} ${input.model}`, auth.user.id);
       if (input.features) await setFeatures(db, id, input.features);
       await recordAudit(db, ctx, { action: "vehicle.created", entityType: "vehicle", entityId: id, after: { slug, ...input } });
       return get(id, db);
@@ -166,7 +202,8 @@ export async function update(auth, id, input, ctx) {
         set.push(`${k === "categorySlug" ? "category_id" : col} = $${params.length}`);
       }
       await db.query(`UPDATE vehicles SET ${set.join(", ")} WHERE id = $1`, params);
-      if (input.imageUrl) await setImage(db, id, input.imageUrl, `${before.brand} ${before.model}`, auth.user.id);
+      if (input.images) await setImages(db, id, input.images, `${before.brand} ${before.model}`, auth.user.id);
+      else if (input.imageUrl) await setImage(db, id, input.imageUrl, `${before.brand} ${before.model}`, auth.user.id);
       if (input.features) await setFeatures(db, id, input.features);
       const after = await get(id, db);
       const changed = Object.fromEntries(Object.keys(input).map((k) => [k, after[k]]));

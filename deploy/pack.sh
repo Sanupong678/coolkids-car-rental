@@ -5,7 +5,7 @@
 set -eu
 cd "$(dirname "$0")/.."
 tar -czf coolkids.tgz \
-  --exclude=node_modules --exclude=dist --exclude=uploads --exclude=storage --exclude=backups \
+  --exclude=node_modules --exclude=dist --exclude=uploads --exclude=storage --exclude=backups --exclude=.rembg \
   --exclude='.env' --exclude='.env.backup*' --exclude='.env.local*' --exclude='.env.prod*' \
   docker-compose.prod.yml deploy backend frontend
 # Secrets must never leave this PC: only .env.example files may be inside.

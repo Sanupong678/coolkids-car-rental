@@ -1,6 +1,6 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { createBooking, getBooking, submitForReview } from '@/api/bookings'
+import { createBooking, getBooking, getBookingDefaults, submitForReview } from '@/api/bookings'
 import { confirmOffline, staffCreateBooking } from '@/api/admin'
 import { useAuthStore } from '@/stores/auth'
 import { money, toLocalInput } from '@/utils/format'
@@ -309,8 +309,27 @@ onMounted(async () => {
     } finally {
       busy.value = false
     }
+  } else if (!props.staff) {
+    prefill()
   }
 })
+
+// A returning customer starts with what they typed last time (fields they already
+// changed are left alone). Staff booking for someone else never prefill.
+const prefilled = ref(false)
+async function prefill() {
+  const saved = await getBookingDefaults().catch(() => null)
+  if (!saved?.customer && !saved?.rental) return
+  const fill = (target, source) => {
+    for (const [k, val] of Object.entries(source ?? {})) {
+      if (val != null && val !== '' && (target[k] === '' || target[k] == null || target[k] === DEFAULTS[k])) target[k] = val
+    }
+  }
+  fill(c.value, saved.customer)
+  fill(use.value, saved.rental)
+  prefilled.value = Boolean(saved.customer)
+}
+const DEFAULTS = { fullName: auth.me?.fullName, phone: auth.me?.phone, countryCode: 'TH', idType: 'NATIONAL_ID', licenseCountry: 'TH', areaOfUse: t('bk.areaDefault'), rentalPurpose: 'TRAVEL' }
 
 onBeforeUnmount(() => (document.documentElement.style.overflow = pageOverflow))
 
@@ -414,6 +433,7 @@ const HEADS = { 1: ['car', 'bk.head1'], 2: ['camera', 'bk.head2'], 3: ['check', 
 
           <section>
             <h3>{{ t('bk.renter') }}</h3>
+            <p v-if="prefilled" class="prefilled"><Icon name="check" :size="14" /> {{ t('bk.prefilled') }}</p>
             <div class="row2">
               <label class="f" data-field="fullName" :class="{ bad: bad('fullName') }"><span>{{ t('bk.fullName') }}</span><input v-model="c.fullName" type="text" autocomplete="name" required /><em v-if="bad('fullName')" class="why">{{ problems.fullName }}</em></label>
               <label class="f" data-field="phone" :class="{ bad: bad('phone') }"><span>{{ t('bk.phone') }}</span><input v-model="c.phone" type="tel" autocomplete="tel" inputmode="tel" required placeholder="08x-xxx-xxxx / +66…" /><em v-if="bad('phone')" class="why">{{ problems.phone }}</em></label>
@@ -698,18 +718,30 @@ h3 i,
   color: #8d909b;
   font-size: 0.85em;
 }
+.prefilled {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: #e6f6ee;
+  color: #1f6b46;
+  font-size: 0.8rem;
+}
 .row2 {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
 }
 .row3 {
   display: grid;
-  grid-template-columns: 1fr 1fr 1.3fr;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.3fr);
   gap: 10px;
 }
 .f {
   display: grid;
+  align-content: start;
+  min-width: 0;
   gap: 5px;
   font-size: 0.78rem;
   color: #4b5060;
@@ -736,6 +768,16 @@ h3 i,
   outline: none;
   border-color: var(--accent);
   box-shadow: 0 0 0 3px rgb(226 54 44 / 0.15);
+}
+/* iOS Safari gives date inputs a native width that ignores the grid column */
+.f input[type='date'] {
+  display: block;
+  min-width: 0;
+  -webkit-appearance: none;
+  appearance: none;
+}
+.f input[type='date']::-webkit-date-and-time-value {
+  text-align: left;
 }
 .f input[aria-invalid='true'] {
   border-color: #c22a21;
@@ -1015,6 +1057,15 @@ h3 i,
   from {
     opacity: 0;
     transform: translateY(16px) scale(0.98);
+  }
+}
+/* tablets: three across is too tight, so the third field gets its own row */
+@media (max-width: 900px) {
+  .row3 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .row3 > :nth-child(3) {
+    grid-column: 1 / -1;
   }
 }
 @media (max-width: 640px) {

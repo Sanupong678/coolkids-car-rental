@@ -161,6 +161,40 @@ export async function mailAdminsPaymentReceived(paymentId) {
   }
 }
 
+/** Staff e-mail when a customer cancels their own booking; flags money that needs refunding. Never throws. */
+export async function mailAdminsBookingCancelled(number, paid) {
+  if (!config.mailConfigured || config.isTest) return;
+  try {
+    const to = await staffRecipients();
+    if (!to.length) return;
+    const { rows } = await pool.query(`${BOOKING_SELECT} WHERE b.booking_number = $1`, [number]);
+    const b = rows[0];
+    if (!b) return;
+    const link = `${config.FRONTEND_URL}/admin?tab=operations&booking=${b.booking_number}`;
+    const subject = `[Coolkids] ลูกค้ายกเลิกการจอง ${b.booking_number} · ${b.legal_full_name ?? ""}${paid ? " · ชำระเงินแล้ว" : ""}`;
+    const rowsOut = [
+      ["user", "ลูกค้า", `${b.legal_full_name ?? "—"} · ${b.customer_phone ?? ""}`],
+      ["car", "รถ", [b.brand, b.model, b.license_plate].filter(Boolean).join(" ")],
+      ["calendar", "รับรถ", when(b.pickup_at)],
+      ["note", "เหตุผล", b.cancellation_reason ?? "—"],
+      ["money", "การชำระเงิน", paid ? "ลูกค้าชำระ / ส่งสลิปแล้ว — ตรวจและคืนเงินตามเงื่อนไขการยกเลิก" : "ยังไม่ได้ชำระ"],
+    ];
+    const text = [`ลูกค้ายกเลิกการจอง: ${b.booking_number}`, "", ...rowsOut.map(([, k, v]) => `${k}: ${v}`), "", `เปิดในหลังบ้าน: ${link}`].join("\n");
+    const html = layout({
+      type: "STAFF_BOOKING_CANCELLED",
+      title: "ลูกค้ายกเลิกการจอง",
+      lead: `${b.legal_full_name ?? "ลูกค้า"} ยกเลิกการจอง ${b.booking_number} รถถูกปล่อยให้จองได้แล้ว`,
+      booking: b,
+      staff: true,
+      sections: [infoRows(rowsOut)],
+      cta: { label: "เปิดการจองในหลังบ้าน", href: link },
+    });
+    for (const addr of to) await sendMail({ to: addr, subject, text, html });
+  } catch (err) {
+    logger.error({ err, number }, "admin cancel e-mail failed");
+  }
+}
+
 /** Sends the staff e-mail for one booking. Never throws: a mail problem must not fail the customer's submit. */
 export async function mailAdminsBookingSubmitted(number) {
   if (!config.mailConfigured || config.isTest) return;

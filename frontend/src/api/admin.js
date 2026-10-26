@@ -18,8 +18,9 @@ export const updateVehicle = (id, body) => api(`/admin/vehicles/${id}`, { method
 export const archiveVehicle = (id) => api(`/admin/vehicles/${id}/archive`, { method: 'POST', body: {} }).then((r) => r.data)
 
 /** Raw image upload (JPEG/PNG/WebP ≤ 8 MB) → { url } */
-export async function uploadImage(file) {
-  const res = await fetch(`${BASE}/admin/uploads`, { method: 'POST', credentials: 'include', headers: { 'Content-Type': file.type }, body: file })
+// removeBg: the server cuts the background off first (rembg; stored as a transparent PNG)
+export async function uploadImage(file, { removeBg = false } = {}) {
+  const res = await fetch(`${BASE}/admin/uploads${removeBg ? '?removeBg=1' : ''}`, { method: 'POST', credentials: 'include', headers: { 'Content-Type': file.type }, body: file })
   const data = await res.json().catch(() => null)
   if (!res.ok) throw new Error(data?.error?.message ?? 'Upload failed')
   return data.data

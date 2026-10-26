@@ -13,6 +13,9 @@ export const startCheckout = (number, locale) => post(`/bookings/${number}/check
 export const startBalanceCheckout = (number, locale) => post(`/bookings/${number}/balance/checkout`, { locale }).then((r) => r.data)
 export const verifyPayment = (number, sessionId) => post(`/bookings/${number}/payment/verify`, { sessionId }).then((r) => r.data)
 export const submitForReview = (number) => post(`/bookings/${number}/submit`, {}).then((r) => r.data)
+export const cancelBooking = (number, reason) => post(`/bookings/${number}/cancel`, reason ? { reason } : {}).then((r) => r.data)
+// What the customer typed on their last booking → prefills the next booking form.
+export const getBookingDefaults = () => api('/me/booking-defaults').then((r) => r.data)
 // Booking slip and receipts of the customer's own booking (PDF).
 export const getMyDocuments = (number) => api(`/bookings/${number}/documents`).then((r) => r.data)
 export const myDocumentPdfUrl = (number, kind, receipt) => `${BASE}/bookings/${number}/documents/pdf?kind=${kind}${receipt ? `&receipt=${receipt}` : ''}`

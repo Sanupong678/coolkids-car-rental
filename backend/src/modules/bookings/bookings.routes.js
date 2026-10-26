@@ -86,6 +86,17 @@ export function bookingRoutes() {
     res.json({ data: await service.submitForReview(req.auth, req.valid.params.number, auditContext(req)) });
   });
 
+  // The renter cancels (unpaid, or paid but not yet being prepared); staff handle any refund.
+  router.post(
+    "/bookings/:number/cancel",
+    requireAuth,
+    paymentLimiter,
+    validate({ params: schemas.numberParam, body: z.object({ reason: z.string().trim().max(300).optional() }) }),
+    async (req, res) => {
+      res.json({ data: await service.cancelBooking(req.auth, req.valid.params.number, req.valid.body, auditContext(req)) });
+    },
+  );
+
   // The customer's booking slip and receipts (PDF), e.g. from the LINE message link.
   router.get("/bookings/:number/documents", requireAuth, validate({ params: schemas.numberParam }), async (req, res) => {
     const b = await service.getBooking(req.auth, req.valid.params.number);

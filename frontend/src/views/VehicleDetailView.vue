@@ -340,8 +340,8 @@ watch(
         <header class="top">
           <RouterLink to="/" class="logo"><b>COOL</b>KIDS</RouterLink>
           <nav class="links" :aria-label="t('car.sections')">
-            <button v-for="x in tabs.slice(1)" :key="x.key" type="button" :class="{ on: tab === x.key }" @click="tab = x.key">
-              {{ x.label }}
+            <button v-for="x in tabs" :key="x.key" type="button" :class="{ on: tab === x.key }" @click="tab = x.key">
+              <Icon :name="x.icon" :size="15" /> {{ x.label }}
             </button>
             <a href="#availability" class="pill">{{ t('car.availability') }}</a>
           </nav>
@@ -586,6 +586,9 @@ watch(
   font-size: var(--fs-sm);
 }
 .links button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   padding: 0;
   border: 0;
   background: none;
@@ -595,6 +598,9 @@ watch(
 .links button.on,
 .links button:hover {
   color: #111;
+}
+.links button.on {
+  font-weight: 600;
 }
 .pill {
   height: 36px;

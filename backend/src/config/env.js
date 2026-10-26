@@ -65,6 +65,11 @@ const schema = z.object({
   // transfer. Empty → every slip waits for a staff member to check it.
   SLIPOK_BRANCH_ID: z.string().default(""),
   SLIPOK_API_KEY: z.string().default(""),
+  // rembg (MIT) cuts the background off car photos staff upload, on this server,
+  // one short-lived process per photo. REMBG_PYTHON = a Python that has `rembg[cpu]`
+  // installed (e.g. the venv's /opt/rembg/bin/python); empty turns the feature off.
+  REMBG_PYTHON: z.string().default("python3"),
+  REMBG_MODEL: z.enum(["isnet-general-use", "u2net", "silueta"]).default("isnet-general-use"),
 
   // LINE Official Account (Messaging API channel) for push notifications, and the
   // LIFF app id (on the LINE Login channel) used by the rich menu.
@@ -151,6 +156,7 @@ export const config = {
   cardPaymentsEnabled: paymentProvider === "stripe" || devToolsEnabled, // the mock gateway only on a developer machine
   promptpayConfigured: Boolean(promptpayDigits),
   slipokConfigured: Boolean(env.SLIPOK_BRANCH_ID && env.SLIPOK_API_KEY),
+  removeBgConfigured: env.NODE_ENV !== "test" && Boolean(env.REMBG_PYTHON),
   lineMessagingConfigured: Boolean(env.LINE_MESSAGING_ACCESS_TOKEN),
   mailConfigured: Boolean(env.SMTP_HOST && env.SMTP_USER && env.SMTP_PASS),
   adminNotifyEmails: env.ADMIN_NOTIFY_EMAILS.split(",").map((s) => s.trim()).filter(Boolean),

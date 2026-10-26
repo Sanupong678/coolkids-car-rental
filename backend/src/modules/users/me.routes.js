@@ -34,6 +34,12 @@ export function meRoutes() {
     res.json({ data: await service.accountDetails(req.auth.user.id) });
   });
 
+  // Booking form prefill: the renter details from the last booking, in full (the owner only).
+  router.get("/booking-defaults", async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    res.json({ data: await service.bookingDefaults(req.auth.user.id) });
+  });
+
   router.put("/password", passwordLimiter, validate({ body: passwordChangeSchema }), async (req, res) => {
     res.json({ data: await service.changePassword(auditContext(req), req.auth, req.valid.body) });
   });

@@ -103,6 +103,60 @@ export async function accountDetails(userId) {
   };
 }
 
+const decrypt = (buf) => {
+  try {
+    return buf ? decryptPII(buf) : null;
+  } catch {
+    return null; // e.g. encrypted under a retired key: the customer types it again
+  }
+};
+
+/**
+ * What the customer typed on their last booking, so the next booking form starts
+ * filled in. Full ID / licence numbers go to the signed-in owner only (never cached);
+ * a licence that has expired is left out so it gets re-entered.
+ */
+export async function bookingDefaults(userId) {
+  const [{ rows: ci }, { rows: b }] = await Promise.all([
+    pool.query(
+      `SELECT legal_full_name, date_of_birth, country_code, id_document_type, id_document_number_enc,
+              license_number_enc, license_country_code, license_expiry, address_enc, phone
+         FROM customer_identities WHERE user_id = $1 AND deleted_at IS NULL
+        ORDER BY is_current DESC, created_at DESC LIMIT 1`,
+      [userId],
+    ),
+    pool.query(
+      `SELECT area_of_use, stay_location, social_url, rental_purpose, contact_email
+         FROM bookings WHERE user_id = $1 AND deleted_at IS NULL AND created_by_staff IS NULL
+        ORDER BY created_at DESC LIMIT 1`,
+      [userId],
+    ),
+  ]);
+  const i = ci[0];
+  // pg reads DATE columns as local midnight; toISOString() would shift them a day back in Bangkok.
+  const day = (d) => (d ? `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}` : "");
+  let address = "";
+  try {
+    address = JSON.parse(decrypt(i?.address_enc) ?? "{}").line1 ?? "";
+  } catch {
+    address = "";
+  }
+  return {
+    customer: i
+      ? {
+          fullName: i.legal_full_name, phone: i.phone, countryCode: i.country_code, idType: i.id_document_type,
+          idNumber: decrypt(i.id_document_number_enc) ?? "", dateOfBirth: day(i.date_of_birth), address,
+          licenseNumber: decrypt(i.license_number_enc) ?? "", licenseCountry: i.license_country_code,
+          licenseExpiry: new Date(i.license_expiry) > new Date() ? day(i.license_expiry) : "",
+        }
+      : null,
+    rental: b[0]
+      ? { areaOfUse: b[0].area_of_use, stayLocation: b[0].stay_location, socialUrl: b[0].social_url,
+          rentalPurpose: b[0].rental_purpose, contactEmail: b[0].contact_email }
+      : null,
+  };
+}
+
 /** Change the password of a username/password account. Other sessions are signed out. */
 export async function changePassword(ctx, auth, { currentPassword, newPassword }) {
   const userId = auth.user.id;

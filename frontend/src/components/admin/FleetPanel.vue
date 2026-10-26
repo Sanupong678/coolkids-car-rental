@@ -10,7 +10,9 @@ const cars = ref([])
 const meta = ref({ categories: [], features: [] })
 const editing = ref(null) // form object or null
 const saving = ref(false)
-const uploading = ref(false)
+const uploading = ref('') // progress text while photos upload, e.g. "2/5"
+const cutBg = ref(true) // cut the background off new photos (rembg on the server)
+const dragFrom = ref(null)
 const error = ref('')
 const q = ref('')
 
@@ -28,7 +30,7 @@ const EMPTY = {
   id: null, categorySlug: '', brand: '', model: '', trim: '', year: new Date().getFullYear(), licensePlate: '', color: '',
   description: '', transmission: 'AUTOMATIC', fuel: 'PETROL', drive: 'FWD', seats: 5, doors: 4, luggageLiters: null,
   engineCc: null, powerHp: null, torqueNm: null, fuelEconomy: null, daily: 1000, hourly: null, deposit: 5000,
-  minRentalDays: 1, maxRentalDays: null, minDriverAge: 21, status: 'DRAFT', isFeatured: false, imageUrl: null, features: [],
+  minRentalDays: 1, maxRentalDays: null, minDriverAge: 21, status: 'DRAFT', isFeatured: false, images: [], features: [],
   // Delivery fee for this car in baht; empty = shop default.
   deliveryFreeKm: null, deliveryPerKm: null, deliveryMinFee: null,
   fleetNo: null, // "#3" on the operations board and booking timeline; empty = next number
@@ -36,7 +38,7 @@ const EMPTY = {
 function edit(c) {
   error.value = ''
   editing.value = c
-    ? { ...EMPTY, ...c, daily: c.dailyRateMinor / 100, hourly: c.hourlyRateMinor ? c.hourlyRateMinor / 100 : null, deposit: c.depositMinor / 100, features: [...c.features], originalImage: c.imageUrl,
+    ? { ...EMPTY, ...c, daily: c.dailyRateMinor / 100, hourly: c.hourlyRateMinor ? c.hourlyRateMinor / 100 : null, deposit: c.depositMinor / 100, features: [...c.features], images: [...c.images], originalImages: c.images.join('|'),
         deliveryPerKm: c.deliveryPerKmMinor != null ? c.deliveryPerKmMinor / 100 : null, deliveryMinFee: c.deliveryMinFeeMinor != null ? c.deliveryMinFeeMinor / 100 : null }
     : { ...EMPTY, categorySlug: meta.value.categories[0]?.slug ?? '', features: [] }
 }
@@ -55,7 +57,8 @@ function payload(f) {
     fleetNo: num(f.fleetNo),
     deliveryFreeKm: num(f.deliveryFreeKm),
     deliveryPerKmMinor: num(f.deliveryPerKm) == null ? null : Math.round(num(f.deliveryPerKm) * 100),
-    deliveryMinFeeMinor: num(f.deliveryMinFee) == null ? null : Math.round(num(f.deliveryMinFee) * 100), ...(f.imageUrl && f.imageUrl !== f.originalImage ? { imageUrl: f.imageUrl } : {}),
+    deliveryMinFeeMinor: num(f.deliveryMinFee) == null ? null : Math.round(num(f.deliveryMinFee) * 100),
+    ...(f.images.join('|') !== f.originalImages ? { images: f.images } : {}),
   }
 }
 
@@ -76,19 +79,37 @@ async function save() {
   }
 }
 
-async function onFile(e) {
-  const file = e.target.files?.[0]
-  if (!file) return
-  uploading.value = true
+const MAX_PHOTOS = 20
+async function onFiles(e) {
+  const files = [...(e.target.files ?? [])].slice(0, MAX_PHOTOS - editing.value.images.length)
+  e.target.value = ''
+  if (!files.length) return
+  const removeBg = cutBg.value && meta.value.removeBg
+  const failed = []
   error.value = ''
-  try {
-    editing.value.imageUrl = (await uploadImage(file)).url
-  } catch (err) {
-    error.value = err.message
-  } finally {
-    uploading.value = false
-    e.target.value = ''
+  for (const [i, file] of files.entries()) {
+    uploading.value = `${i + 1}/${files.length}`
+    try {
+      const { url } = await uploadImage(file, { removeBg })
+      if (!editing.value.images.includes(url)) editing.value.images.push(url)
+    } catch (err) {
+      failed.push(`${file.name}: ${err.message}`)
+    }
   }
+  uploading.value = ''
+  if (failed.length) error.value = failed.join(' · ')
+}
+
+// Photo order: the first one is the cover shown on cards and at the top of the car page.
+function movePhoto(from, to) {
+  const list = editing.value.images
+  if (to < 0 || to >= list.length || from === to) return
+  list.splice(to, 0, list.splice(from, 1)[0])
+}
+const removePhoto = (i) => editing.value.images.splice(i, 1)
+function dropPhoto(to) {
+  if (dragFrom.value != null) movePhoto(dragFrom.value, to)
+  dragFrom.value = null
 }
 
 async function archive() {
@@ -151,16 +172,43 @@ const STATUS_CLASS = { ACTIVE: 'ok', DRAFT: 'muted', MAINTENANCE: 'warn', OUT_OF
         </header>
 
         <div class="scroll">
-          <section class="photo">
-            <div class="preview">
-              <img v-if="editing.imageUrl" :src="editing.imageUrl" alt="" />
-              <Icon v-else name="camera" :size="32" />
-            </div>
-            <label class="upload">
-              <input type="file" accept="image/jpeg,image/png,image/webp" @change="onFile" />
-              <Icon name="camera" :size="14" /> {{ uploading ? 'กำลังอัปโหลด…' : editing.imageUrl ? 'เปลี่ยนรูป' : 'อัปโหลดรูปรถ' }}
+          <section class="photos">
+            <h4>รูปรถ <small>{{ editing.images.length }}/{{ MAX_PHOTOS }} · รูปแรกคือรูปปก ลากเพื่อเรียงลำดับ</small></h4>
+            <ol class="shots">
+              <li
+                v-for="(url, i) in editing.images"
+                :key="url"
+                :class="{ cover: i === 0, dragging: dragFrom === i }"
+                draggable="true"
+                @dragstart="dragFrom = i"
+                @dragend="dragFrom = null"
+                @dragover.prevent
+                @drop.prevent="dropPhoto(i)"
+              >
+                <img :src="url" alt="" draggable="false" />
+                <span v-if="i === 0" class="badge">รูปปก</span>
+                <div class="tools">
+                  <button v-if="i > 0" type="button" title="ตั้งเป็นรูปปก" aria-label="ตั้งเป็นรูปปก" @click="movePhoto(i, 0)"><Icon name="star" :size="13" /></button>
+                  <button type="button" title="เลื่อนไปก่อนหน้า" aria-label="เลื่อนไปก่อนหน้า" :disabled="i === 0" @click="movePhoto(i, i - 1)"><Icon name="chevron-left" :size="13" /></button>
+                  <button type="button" title="เลื่อนไปถัดไป" aria-label="เลื่อนไปถัดไป" :disabled="i === editing.images.length - 1" @click="movePhoto(i, i + 1)"><Icon name="chevron-right" :size="13" /></button>
+                  <button type="button" class="del" title="ลบรูปนี้" aria-label="ลบรูปนี้" @click="removePhoto(i)"><Icon name="x" :size="13" /></button>
+                </div>
+              </li>
+              <li v-if="editing.images.length < MAX_PHOTOS" class="add-shot">
+                <label>
+                  <input type="file" accept="image/jpeg,image/png,image/webp" multiple :disabled="!!uploading" @change="onFiles" />
+                  <Icon name="camera" :size="22" />
+                  <span>{{ uploading ? `กำลังอัปโหลด ${uploading}…` : 'เพิ่มรูป (เลือกได้หลายรูป)' }}</span>
+                </label>
+              </li>
+            </ol>
+            <label class="chk" :class="{ off: !meta.removeBg }">
+              <input type="checkbox" :checked="meta.removeBg && cutBg" :disabled="!meta.removeBg" @change="cutBg = $event.target.checked" />
+              ตัดพื้นหลังอัตโนมัติ
+              <small v-if="!meta.removeBg">— เซิร์ฟเวอร์ยังไม่ได้ติดตั้ง rembg</small>
+              <small v-else-if="cutBg">— ฟรี ใช้เวลาราว 5–20 วินาทีต่อรูป ได้ไฟล์ PNG พื้นโปร่งใส</small>
             </label>
-            <small>แนะนำ PNG/WebP พื้นหลังโปร่งใส ไม่เกิน 8 MB</small>
+            <small>JPEG / PNG / WebP ไม่เกิน 8 MB ต่อรูป</small>
           </section>
 
           <section>
@@ -491,37 +539,105 @@ textarea {
   grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
   gap: 8px;
 }
-.photo {
-  grid-template-columns: 200px 1fr;
-  align-items: center;
+.photos h4 small {
+  margin-left: 6px;
+  color: var(--viz-muted);
+  font-weight: 400;
 }
-.preview {
-  grid-row: span 2;
+.shots {
   display: grid;
-  place-items: center;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.shots li {
+  position: relative;
   aspect-ratio: 16 / 10;
+  border: 1px solid var(--viz-border);
   border-radius: 12px;
   background: rgb(255 255 255 / 0.05);
-  color: var(--viz-muted);
+  overflow: hidden;
 }
-.preview img {
+.shots li[draggable='true'] {
+  cursor: grab;
+}
+.shots li.cover {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+.shots li.dragging {
+  opacity: 0.4;
+}
+.shots img {
   width: 100%;
   height: 100%;
   object-fit: contain;
 }
-.upload {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  justify-self: start;
-  padding: 8px 14px;
-  border: 1px solid var(--viz-border);
+.badge {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  padding: 2px 8px;
   border-radius: 999px;
-  color: var(--viz-text);
+  background: var(--accent);
+  color: #fff;
+  font-size: 0.7rem;
+  font-weight: 600;
+}
+.tools {
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  display: flex;
+  gap: 4px;
+}
+.tools button {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: rgb(0 0 0 / 0.6);
+  color: #fff;
   cursor: pointer;
 }
-.upload input {
+.tools button:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+.tools .del:hover {
+  background: var(--bad);
+}
+.add-shot label {
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 6px;
+  height: 100%;
+  padding: 8px;
+  border: 1px dashed var(--viz-border);
+  border-radius: 12px;
+  color: var(--viz-muted);
+  font-size: 0.78rem;
+  text-align: center;
+  cursor: pointer;
+}
+.add-shot {
+  border: 0 !important;
+  background: none !important;
+}
+.add-shot input {
   display: none;
+}
+.chk.off {
+  opacity: 0.6;
+}
+.chk small {
+  color: var(--viz-muted);
 }
 .danger {
   margin-right: auto;
@@ -610,8 +726,8 @@ textarea {
   .g3 {
     grid-template-columns: 1fr 1fr;
   }
-  .photo {
-    grid-template-columns: 1fr;
+  .shots {
+    grid-template-columns: 1fr 1fr;
   }
 }
 </style>

@@ -143,6 +143,7 @@
 | `LINE_MESSAGING_ACCESS_TOKEN`, `LINE_MESSAGING_CHANNEL_SECRET` | Messaging API (3.1) | ✔ |
 | `PROMPTPAY_ID`, `PROMPTPAY_NAME` | ข้อ 3.2 | ✔ |
 | `SLIPOK_BRANCH_ID`, `SLIPOK_API_KEY` | SlipOK (3.2) | |
+| `REMBG_PYTHON`, `REMBG_MODEL` | ไม่ต้องตั้ง — Docker image ติดตั้ง rembg (MIT, ฟรี) ไว้แล้ว ใช้ตัดพื้นหลังรูปรถตอนอัปโหลด (เปิด process ทีละรูปแล้วปิด, ~5–20 วิ/รูป) | |
 | `S3_ENDPOINT`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`, `S3_BUCKET_PUBLIC`, `S3_BUCKET_PRIVATE` | Cloudflare R2 (2.5) | แนะนำ |
 | `GOOGLE_MAPS_API_KEY` | Google Cloud (3.3) | |
 | `GOOGLE_CLIENT_ID/SECRET`, `FACEBOOK_APP_ID/SECRET` | ข้อ 3.3 | |

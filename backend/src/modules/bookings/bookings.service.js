@@ -14,7 +14,7 @@ import * as maps from "../maps/maps.service.js";
 import { queueEmail } from "../notifications/email.service.js";
 import { queueLine } from "../notifications/line.service.js";
 import { bookingSummaries, bookingSummaryText } from "./summary.js";
-import { mailAdminsBookingSubmitted, mailAdminsPaymentReceived } from "./admin-mail.js";
+import { mailAdminsBookingCancelled, mailAdminsBookingSubmitted, mailAdminsPaymentReceived } from "./admin-mail.js";
 import { paymentProvider } from "../payments/providers.js";
 
 // Web booking flow (spec 1.8): details → contract → payment → tracking.
@@ -189,18 +189,26 @@ export async function createBooking(auth, input, ctx, opts = {}) {
       }
 
       // Identity documents are versioned and encrypted; the booking points at this exact version.
+      // Same ID and licence numbers as last time → the photos already sent carry over (no re-upload).
+      const { rows: prev } = await db.query(
+        `SELECT id_front_media_id, id_back_media_id, license_front_media_id FROM customer_identities
+          WHERE user_id = $1 AND is_current AND deleted_at IS NULL AND id_document_type = $2
+            AND id_document_number_hmac = $3 AND license_number_hmac = $4`,
+        [userId, c.idType, hmac(c.idNumber), hmac(c.licenseNumber)],
+      );
       await db.query("UPDATE customer_identities SET is_current = false WHERE user_id = $1 AND is_current", [userId]);
       const { rows: idRows } = await db.query(
         `INSERT INTO customer_identities (user_id, country_code, legal_full_name, date_of_birth, id_document_type,
            id_document_number_enc, id_document_number_last4, id_document_number_hmac,
            license_number_enc, license_number_last4, license_number_hmac, license_country_code, license_expiry,
-           address_enc, phone)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING id`,
+           address_enc, phone, id_front_media_id, id_back_media_id, license_front_media_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18) RETURNING id`,
         [
           userId, c.countryCode, c.fullName, c.dateOfBirth, c.idType,
           encryptPII(c.idNumber), last4(c.idNumber), hmac(c.idNumber),
           encryptPII(c.licenseNumber), last4(c.licenseNumber), hmac(c.licenseNumber), c.licenseCountry, c.licenseExpiry,
           encryptPII(JSON.stringify({ line1: c.address, country: c.countryCode })), c.phone,
+          prev[0]?.id_front_media_id ?? null, prev[0]?.id_back_media_id ?? null, prev[0]?.license_front_media_id ?? null,
         ],
       );
       await db.query("UPDATE users SET phone = COALESCE(phone, $2) WHERE id = $1", [userId, c.phone]);
@@ -367,6 +375,8 @@ export function bookingDto(r) {
     stage: STAGE[r.status],
     createdAt: r.created_at,
     holdExpiresAt: r.status === "PENDING" ? r.hold_expires_at : null,
+    canCancel: canCancel(r),
+    cancellation: r.cancelled_at ? { at: r.cancelled_at, reason: r.cancellation_reason } : null,
     pickupAt: r.pickup_at,
     returnAt: r.return_at,
     rentalDays: r.rental_days,
@@ -500,7 +510,13 @@ export async function uploadDocument(auth, number, kind, { body, ext, contentTyp
         ]);
       }
       if (prevId && prevId !== rows[0].id) {
-        await db.query("UPDATE media SET deleted_at = now(), deleted_by = $2 WHERE id = $1", [prevId, auth.user.id]);
+        // Photos carry over between bookings: keep the file while an older identity still shows it.
+        await db.query(
+          `UPDATE media SET deleted_at = now(), deleted_by = $2 WHERE id = $1
+              AND NOT EXISTS (SELECT 1 FROM customer_identities
+                               WHERE $1 IN (id_front_media_id, id_back_media_id, license_front_media_id))`,
+          [prevId, auth.user.id],
+        );
       }
       await recordAudit(db, ctx, { action: "identity.document_uploaded", entityType: "booking", entityId: b.id, after: { kind } });
       const after = doc.attachment ? { ...b, attachments: { ...b.attachments, [kind]: rows[0].id } } : { ...b, [doc.column]: rows[0].id };
@@ -575,6 +591,61 @@ export async function submitForReview(auth, number, ctx) {
 
 export async function getBooking(auth, number) {
   return bookingDto(await loadBooking(pool, number, auth));
+}
+
+// ---------------------------------------------------------------- cancel (customer)
+
+// The renter may cancel until staff start preparing the car (and before pick-up time).
+const CANCELLABLE = ["PENDING", "CONFIRMED"];
+const canCancel = (r) => CANCELLABLE.includes(r.status) && new Date(r.pickup_at) > new Date();
+
+/**
+ * The renter cancels their own booking: the car is released (status trigger) and
+ * open checkouts are closed. Money already paid is not refunded automatically —
+ * staff are told and handle it by the shop's cancellation policy.
+ */
+export async function cancelBooking(auth, number, { reason }, ctx) {
+  const paid = await withTransaction(
+    async (db) => {
+      const b = await loadBooking(db, number, auth, { lock: true });
+      if (b.user_id !== auth.user.id) throw Forbidden("Only the renter can cancel this booking");
+      if (!canCancel(b)) throw Conflict("NOT_CANCELLABLE", "การจองนี้ยกเลิกเองไม่ได้แล้ว กรุณาติดต่อแอดมินทาง LINE @Coolkidscar");
+
+      const { rows: money } = await db.query(
+        `SELECT COALESCE((SELECT sum(amount_minor) FROM payments WHERE booking_id = $1 AND status = 'SUCCEEDED'), 0)::bigint AS paid_minor,
+                EXISTS (SELECT 1 FROM payment_slips WHERE booking_id = $1 AND status IN ('VERIFIED','NEEDS_REVIEW')) AS has_slip`,
+        [b.id],
+      );
+      const paidMinor = Number(money[0].paid_minor);
+      const paidSomething = paidMinor > 0 || money[0].has_slip;
+
+      await db.query(
+        "UPDATE payments SET status = 'CANCELLED' WHERE booking_id = $1 AND status IN ('INITIATED','REQUIRES_ACTION')",
+        [b.id],
+      );
+      const why = `ลูกค้ายกเลิกเอง${reason ? `: ${reason}` : ""}`;
+      await db.query("SELECT set_config('app.status_reason', $1, true)", [why]);
+      await db.query(
+        "UPDATE bookings SET status = 'CANCELLED', cancelled_by = $2, cancellation_reason = $3 WHERE id = $1",
+        [b.id, auth.user.id, why],
+      );
+      await emit(db, b.id, "booking.cancelled", { bookingNumber: b.booking_number, by: "customer", paidMinor });
+      await notify(db, b.user_id, {
+        type: "BOOKING_CANCELLED", bookingId: b.id,
+        title: "ยกเลิกการจองแล้ว",
+        body: `${b.booking_number}: ยกเลิกการจอง ${b.brand} ${b.model} เรียบร้อย${
+          paidSomething ? " แอดมินจะติดต่อกลับเรื่องเงินที่ชำระแล้วตามเงื่อนไขการยกเลิก" : ""}`,
+      });
+      await recordAudit(db, ctx, {
+        action: "booking.cancelled_by_customer", entityType: "booking", entityId: b.id,
+        before: { status: b.status }, after: { status: "CANCELLED", reason: reason ?? null, paidMinor },
+      });
+      return paidSomething;
+    },
+    { actorId: auth.user.id },
+  );
+  void mailAdminsBookingCancelled(number, paid);
+  return getBooking(auth, number);
 }
 
 /**

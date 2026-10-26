@@ -6,6 +6,7 @@ import { money } from '@/utils/format'
 import { useI18n } from '@/i18n'
 import Icon from '@/components/ui/Icon.vue'
 import BookingModal from '@/components/booking/BookingModal.vue'
+import CancelBookingDialog from '@/components/booking/CancelBookingDialog.vue'
 import ContractDocument from '@/components/booking/ContractDocument.vue'
 import IdentityDocuments from '@/components/booking/IdentityDocuments.vue'
 import PromptPayPayment from '@/components/booking/PromptPayPayment.vue'
@@ -28,6 +29,8 @@ const error = ref('')
 const contract = ref(null)
 const showContract = ref(false)
 const resume = ref(false)
+const cancelling = ref(false)
+const justCancelled = ref(false)
 const tracking = ref(null)
 let poll
 let trackPoll
@@ -38,6 +41,12 @@ async function load() {
   } catch (err) {
     error.value = err.status === 404 ? t('st.notFound') : errorText(err)
   }
+}
+
+function onCancelled(updated) {
+  b.value = updated
+  cancelling.value = false
+  justCancelled.value = true
 }
 
 async function loadTracking() {
@@ -339,11 +348,22 @@ async function copySummary() {
 
       <IdentityDocuments v-if="b.documents && !['EXPIRED', 'CANCELLED', 'REFUNDED'].includes(b.status)" :number="b.number" :documents="b.documents" :editable="docsOpen" @updated="onDocs" />
 
+      <!-- the renter may cancel (e.g. to take another car) until staff start preparing it -->
+      <section v-if="b.canCancel" class="card cancel-box">
+        <p>{{ t('acct.cancelHint') }}</p>
+        <button type="button" class="btn btn-ghost btn-pill cancel-btn" @click="cancelling = true">{{ t('acct.cancel') }}</button>
+      </section>
+      <section v-else-if="justCancelled" class="card cancel-box done">
+        <p>{{ t('acct.cancelled', { number: b.number }) }}</p>
+        <RouterLink to="/vehicles" class="btn btn-primary btn-pill">{{ t('acct.pickAnother') }}</RouterLink>
+      </section>
+
       <p class="help">{{ t('st.help', { line: '@Coolkidscar', phone: '065-365-6514' }) }} · <RouterLink to="/account">{{ t('st.allMine') }}</RouterLink></p>
     </div>
     <div v-else class="wrap"><div class="skeleton" style="height: 360px" /></div>
 
     <BookingModal v-if="resume" :resume-number="b.number" @close="onResumeClose" />
+    <CancelBookingDialog v-if="cancelling" :booking="b" @close="cancelling = false" @cancelled="onCancelled" />
 
     <dialog v-if="showContract" open class="ct-dialog" @click.self="showContract = false">
       <div class="ct-card">
@@ -355,6 +375,27 @@ async function copySummary() {
 </template>
 
 <style scoped>
+.cancel-box {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-3);
+}
+.cancel-box p {
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+}
+.cancel-btn {
+  color: #a3221a;
+}
+.cancel-box.done {
+  background: #e6f6ee;
+}
+.cancel-box.done p {
+  color: #1f6b46;
+  font-weight: 600;
+}
 .ct-actions {
   display: flex;
   flex-wrap: wrap;

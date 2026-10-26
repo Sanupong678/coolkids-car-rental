@@ -322,4 +322,31 @@ describe("admin fleet management", () => {
   test("uploads accept real images only", async () => {
     await admin.post("/api/v1/admin/uploads").set("Origin", ORIGIN).set("Content-Type", "image/png").send(Buffer.from("not a png")).expect(400);
   });
+
+  test("a car keeps several photos in the order staff set; the first is the cover", async () => {
+    const [a, b, c] = ["a", "b", "c"].map((x) => `/uploads/vehicles/test-${x}.png`);
+    const created = await admin.post("/api/v1/admin/vehicles").set("Origin", ORIGIN).send({
+      categorySlug: "suv-7", brand: "Honda", model: "CR-V", year: 2025, licensePlate: "ภพ 777",
+      transmission: "AUTOMATIC", fuel: "HYBRID", drive: "AWD", seats: 7, dailyRateMinor: 300_000, depositMinor: 500_000,
+      minRentalDays: 1, minDriverAge: 21, status: "ACTIVE", isFeatured: false, images: [a, b, c],
+    }).expect(201);
+    const v = created.body.data;
+    assert.deepEqual(v.images, [a, b, c]);
+    assert.equal(v.imageUrl, a);
+
+    // new cover, one photo dropped
+    const res = await admin.patch(`/api/v1/admin/vehicles/${v.id}`).set("Origin", ORIGIN).send({ images: [c, a] }).expect(200);
+    assert.deepEqual(res.body.data.images, [c, a]);
+    assert.equal(res.body.data.imageUrl, c);
+    const pub = await request(app).get(`/api/v1/vehicles/${v.slug}`).expect(200);
+    assert.deepEqual(pub.body.data.images.map((i) => i.url), [c, a]);
+
+    await admin.patch(`/api/v1/admin/vehicles/${v.id}`).set("Origin", ORIGIN).send({ images: [a, a] }).expect(400);
+  });
+
+  test("background removal says so when remove.bg is not set up", async () => {
+    const png = Buffer.from("89504e470d0a1a0a0000000d4948445200000001000000010806000000", "hex");
+    const res = await admin.post("/api/v1/admin/uploads?removeBg=1").set("Origin", ORIGIN).set("Content-Type", "image/png").send(png).expect(503);
+    assert.equal(res.body.error.code, "REMOVE_BG_UNAVAILABLE");
+  });
 });
