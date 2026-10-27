@@ -83,6 +83,15 @@ describe("password sign-in", () => {
     assert.equal(locked.body.error.code, "ACCOUNT_LOCKED");
   });
 
+  test("staff sign-in ends with the browser; a customer stays signed in", async () => {
+    const sid = (res) => res.headers["set-cookie"].find((c) => c.startsWith("sid="));
+    const staff = await request(app).post("/api/v1/auth/login").set("Origin", ORIGIN).send({ login: "admin", password: "1234" }).expect(204);
+    assert.doesNotMatch(sid(staff), /Expires=/i, "browser-session cookie for back-office accounts");
+    const customer = await request(app).post("/api/v1/auth/register").set("Origin", ORIGIN)
+      .send({ fullName: "Kept", email: "kept@example.com", password: "s3cret-pass" }).expect(201);
+    assert.match(sid(customer), /Expires=/i);
+  });
+
   test("passwords are stored as scrypt hashes, never in clear", async () => {
     const { rows } = await pool.query("SELECT password_hash FROM user_credentials WHERE login = 'admin'");
     assert.match(rows[0].password_hash, /^scrypt\$16384\$8\$1\$/);

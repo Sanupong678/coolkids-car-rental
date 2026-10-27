@@ -118,5 +118,7 @@ export async function openSession(db, { userId, ctx, provider, isNewUser }) {
     entityId: userId,
     after: { provider },
   });
-  return { token, expiresAt: session.expires_at };
+  // Back-office accounts (any role) get a browser-session cookie: closing the browser signs them out.
+  const { rows } = await db.query("SELECT EXISTS (SELECT 1 FROM user_roles WHERE user_id = $1) AS staff", [userId]);
+  return { token, expiresAt: session.expires_at, staff: rows[0].staff };
 }

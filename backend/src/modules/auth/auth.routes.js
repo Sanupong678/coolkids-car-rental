@@ -11,12 +11,14 @@ import * as passwordAuth from "./password.service.js";
 const OAUTH_COOKIE = "oauth_pending";
 const OAUTH_COOKIE_PATH = "/api/v1/auth";
 
-const sessionCookieOptions = (expires) => ({
+// Customers keep the cookie until the session expires; staff get a browser-session
+// cookie (no expiry date), so closing the browser signs them out.
+const sessionCookieOptions = (session) => ({
   httpOnly: true,
   secure: config.isProd,
   sameSite: "lax", // sent on top-level navigation back from Google, not on cross-site subrequests
   path: "/",
-  expires,
+  ...(session.staff ? {} : { expires: new Date(session.expiresAt) }),
 });
 
 const loginSchema = z.object({
@@ -38,14 +40,14 @@ export function authRoutes({ authServices }) {
   // POST /api/v1/auth/login { login, password } → session cookie
   router.post("/login", validate({ body: loginSchema }), async (req, res) => {
     const session = await passwordAuth.login(req.valid.body, auditContext(req));
-    res.cookie(SESSION_COOKIE, session.token, sessionCookieOptions(new Date(session.expiresAt)));
+    res.cookie(SESSION_COOKIE, session.token, sessionCookieOptions(session));
     res.status(204).end();
   });
 
   // POST /api/v1/auth/register { fullName, email, phone?, password } → session cookie
   router.post("/register", validate({ body: registerSchema }), async (req, res) => {
     const session = await passwordAuth.register(req.valid.body, auditContext(req));
-    res.cookie(SESSION_COOKIE, session.token, sessionCookieOptions(new Date(session.expiresAt)));
+    res.cookie(SESSION_COOKIE, session.token, sessionCookieOptions(session));
     res.status(201).end();
   });
 
@@ -57,7 +59,7 @@ export function authRoutes({ authServices }) {
     const line = authServices.line;
     if (!line?.provider?.profileFromIdToken) throw new AppError(503, "OAUTH_NOT_CONFIGURED", "LINE sign-in is not configured on this server");
     const session = await line.signIn(await line.provider.profileFromIdToken(req.valid.body.idToken), auditContext(req));
-    res.cookie(SESSION_COOKIE, session.token, sessionCookieOptions(new Date(session.expiresAt)));
+    res.cookie(SESSION_COOKIE, session.token, sessionCookieOptions(session));
     res.status(204).end();
   });
 
@@ -114,7 +116,7 @@ function mountOAuth(router, name, authService) {
       const result = await authService.completeLogin({
         code: req.query.code, state: req.query.state, pending, ctx: auditContext(req),
       });
-      res.cookie(SESSION_COOKIE, result.token, sessionCookieOptions(new Date(result.expiresAt)));
+      res.cookie(SESSION_COOKIE, result.token, sessionCookieOptions(result));
       res.redirect(302, new URL(result.returnTo, config.FRONTEND_URL).toString());
     } catch (err) {
       // Provider token errors carry the reason in the response body (e.g. invalid_grant: "Bad Request").

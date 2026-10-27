@@ -310,26 +310,38 @@ onMounted(async () => {
       busy.value = false
     }
   } else if (!props.staff) {
-    prefill()
+    loadSaved()
   }
 })
 
-// A returning customer starts with what they typed last time (fields they already
-// changed are left alone). Staff booking for someone else never prefill.
-const prefilled = ref(false)
-async function prefill() {
-  const saved = await getBookingDefaults().catch(() => null)
-  if (!saved?.customer && !saved?.rental) return
-  const fill = (target, source) => {
-    for (const [k, val] of Object.entries(source ?? {})) {
-      if (val != null && val !== '' && (target[k] === '' || target[k] == null || target[k] === DEFAULTS[k])) target[k] = val
-    }
-  }
-  fill(c.value, saved.customer)
-  fill(use.value, saved.rental)
-  prefilled.value = Boolean(saved.customer)
+// A returning customer is always asked first: book with the details saved from
+// their last booking, or type new ones. Nothing is filled in until they choose, and
+// they can go back to a blank form. Staff booking for someone else never see this.
+const saved = ref(null) // { customer, rental } from the last booking, or null
+const savedChoice = ref(null) // null = not asked yet | 'saved' | 'new'
+const BLANK_C = { ...c.value }
+const BLANK_USE = { ...use.value }
+async function loadSaved() {
+  const s = await getBookingDefaults().catch(() => null)
+  if (s?.customer || s?.rental) saved.value = s
 }
-const DEFAULTS = { fullName: auth.me?.fullName, phone: auth.me?.phone, countryCode: 'TH', idType: 'NATIONAL_ID', licenseCountry: 'TH', areaOfUse: t('bk.areaDefault'), rentalPurpose: 'TRAVEL' }
+const savedSummary = computed(() => {
+  const s = saved.value?.customer
+  if (!s) return ''
+  const id = s.idNumber ? `${t('bk.savedId')} ••••${s.idNumber.slice(-4)}` : ''
+  return [s.fullName, id, s.phone].filter(Boolean).join(' · ')
+})
+function useSaved() {
+  for (const [target, source] of [[c, saved.value.customer], [use, saved.value.rental]]) {
+    for (const [k, val] of Object.entries(source ?? {})) if (val != null && val !== '') target.value[k] = val
+  }
+  savedChoice.value = 'saved'
+}
+function startFresh() {
+  c.value = { ...BLANK_C }
+  use.value = { ...BLANK_USE }
+  savedChoice.value = 'new'
+}
 
 onBeforeUnmount(() => (document.documentElement.style.overflow = pageOverflow))
 
@@ -365,6 +377,16 @@ const HEADS = { 1: ['car', 'bk.head1'], 2: ['camera', 'bk.head2'], 3: ['check', 
       <div ref="scroller" class="body">
         <!-- 1. details -->
         <form v-if="step === 1 && v" id="bk-details" class="details" novalidate @submit.prevent="submitDetails">
+          <section v-if="saved && savedChoice === null" class="saved-ask" role="group" aria-labelledby="saved-title">
+            <div>
+              <strong id="saved-title">{{ t('bk.savedTitle') }}</strong>
+              <small>{{ savedSummary || t('bk.savedRentalOnly') }}</small>
+            </div>
+            <div class="saved-actions">
+              <button type="button" class="btn btn-primary btn-pill" @click="useSaved">{{ t('bk.savedUse') }}</button>
+              <button type="button" class="btn btn-ghost btn-pill" @click="startFresh">{{ t('bk.savedNew') }}</button>
+            </div>
+          </section>
           <section>
             <h3>{{ t('bk.period') }}</h3>
             <div class="cal-wrap">
@@ -433,7 +455,10 @@ const HEADS = { 1: ['car', 'bk.head1'], 2: ['camera', 'bk.head2'], 3: ['check', 
 
           <section>
             <h3>{{ t('bk.renter') }}</h3>
-            <p v-if="prefilled" class="prefilled"><Icon name="check" :size="14" /> {{ t('bk.prefilled') }}</p>
+            <p v-if="savedChoice === 'saved'" class="prefilled">
+              <Icon name="check" :size="14" /> {{ t('bk.prefilled') }}
+              <button type="button" class="link" @click="startFresh">{{ t('bk.savedClear') }}</button>
+            </p>
             <div class="row2">
               <label class="f" data-field="fullName" :class="{ bad: bad('fullName') }"><span>{{ t('bk.fullName') }}</span><input v-model="c.fullName" type="text" autocomplete="name" required /><em v-if="bad('fullName')" class="why">{{ problems.fullName }}</em></label>
               <label class="f" data-field="phone" :class="{ bad: bad('phone') }"><span>{{ t('bk.phone') }}</span><input v-model="c.phone" type="tel" autocomplete="tel" inputmode="tel" required placeholder="08x-xxx-xxxx / +66…" /><em v-if="bad('phone')" class="why">{{ problems.phone }}</em></label>
@@ -717,6 +742,41 @@ h3 i,
   font-weight: 400;
   color: #8d909b;
   font-size: 0.85em;
+}
+.saved-ask {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 16px;
+  border: 1px solid #f1c9c5;
+  border-radius: 14px;
+  background: #fff6f5;
+}
+.saved-ask > div:first-child {
+  display: grid;
+  gap: 2px;
+}
+.saved-ask small {
+  color: #6b6d75;
+  font-size: 0.8rem;
+}
+.saved-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.prefilled .link {
+  margin-left: auto;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-weight: 600;
+  text-decoration: underline;
+  cursor: pointer;
 }
 .prefilled {
   display: flex;
