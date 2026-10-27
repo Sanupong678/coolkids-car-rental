@@ -228,6 +228,15 @@ export function adminRoutes() {
       res.json({ data: await bookings.confirmOffline(req.auth, req.valid.params.number, req.valid.body, auditContext(req)) });
     },
   );
+  // Staff booking, customer pays through the system: approve now, the customer pays the fee online.
+  router.post(
+    "/bookings/:number/request-payment",
+    requirePermission(P.BOOKINGS_WRITE, P.USERS_READ_SENSITIVE),
+    validate({ params: numberParam, body: z.object({ note: z.string().trim().max(300).optional() }) }),
+    async (req, res) => {
+      res.json({ data: await review.approveForPayment(req.auth, req.valid.params.number, req.valid.body, auditContext(req)) });
+    },
+  );
   // At hand-over: a Stripe link (and its QR) the customer pays the rent balance + deposit with on their phone.
   router.post(
     "/bookings/:number/balance-link",

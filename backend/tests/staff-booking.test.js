@@ -137,6 +137,29 @@ describe("staff booking on a customer's behalf, paid outside the system", () => 
     const { rows } = await pool.query("SELECT u.email FROM bookings b JOIN users u ON u.id = b.user_id WHERE b.booking_number = $1", [n]);
     assert.equal(rows[0].email, "phone-0811112222@walkin.coolkids.local", "no e-mail: an account keyed by the phone number");
   });
+
+  test("or the customer pays through the system: staff approve, the customer gets the fee to pay online", async () => {
+    const res = await admin.post("/api/v1/admin/bookings").set("Origin", ORIGIN)
+      .send(bookingBody({ pickupAt: inDays(50), returnAt: inDays(52), customer: { ...bookingBody().customer, phone: "0811113333" } })).expect(201);
+    const n = res.body.data.number;
+    const early = await admin.post(`/api/v1/admin/bookings/${n}/request-payment`).set("Origin", ORIGIN).send({}).expect(409);
+    assert.equal(early.body.error.code, "DOCUMENTS_REQUIRED");
+    for (const [i, kind] of ["id_front", "license_front"].entries()) {
+      await admin.put(`/api/v1/bookings/${n}/documents/${kind}`).set("Origin", ORIGIN).set("Content-Type", "image/png").send(tinyPng(50 + i)).expect(200);
+    }
+    const ok = await admin.post(`/api/v1/admin/bookings/${n}/request-payment`).set("Origin", ORIGIN).send({}).expect(200);
+    assert.equal(ok.body.data.status, "PENDING", "not confirmed until the customer pays");
+    assert.equal(ok.body.data.review.status, "APPROVED");
+    assert.ok(new Date(ok.body.data.holdExpiresAt) - Date.now() > 11 * 3_600_000, "the car is held for the payment window");
+    const { rows } = await pool.query(
+      `SELECT (SELECT count(*) FROM payments p WHERE p.booking_id = b.id)::int AS payments,
+              EXISTS (SELECT 1 FROM notifications x WHERE x.entity_id = b.id AND x.notification_type = 'BOOKING_APPROVED') AS told
+         FROM bookings b WHERE b.booking_number = $1`,
+      [n],
+    );
+    assert.deepEqual(rows[0], { payments: 0, told: true });
+    await admin.post(`/api/v1/admin/bookings/${n}/request-payment`).set("Origin", ORIGIN).send({}).expect(409);
+  });
 });
 
 describe("rent balance + deposit paid online after confirmation", () => {

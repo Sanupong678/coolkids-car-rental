@@ -27,6 +27,51 @@ export async function listApprovals() {
   return rows.map((r) => ({ ...bookingDto(r), customerEmail: emailOf[r.user_id] ?? null }));
 }
 
+/** Documents OK: the car stays held for the payment window and the customer is told to pay the reservation fee. */
+async function approveTx(db, b, auth, note, settings) {
+  const { rows: h } = await db.query(
+    `UPDATE bookings SET review_status = 'APPROVED', submitted_at = COALESCE(submitted_at, now()), approved_at = now(),
+            approved_by = $2, review_note = $3, hold_expires_at = now() + make_interval(hours => $4)
+      WHERE id = $1 RETURNING hold_expires_at`,
+    [b.id, auth.user.id, note ?? null, Number(settings["booking.payment_hold_hours"])],
+  );
+  await notify(db, b.user_id, {
+    type: "BOOKING_APPROVED", bookingId: b.id,
+    title: "เอกสารผ่านการตรวจสอบแล้ว",
+    body: `การจอง ${b.booking_number} (${b.brand} ${b.model})\nกรุณาโอนค่าจอง ${bahtText(dueNow(b))} บาท ภายใน ${until(h[0].hold_expires_at)} เพื่อยืนยันการจอง (โอน = จอง)\nกดลิงก์ด้านล่างเพื่อสแกน QR และแนบสลิป`,
+  });
+}
+
+/**
+ * A booking staff made for a customer who pays through the system: staff checked the
+ * documents themselves, so it is approved at once and the customer pays the reservation
+ * fee from their own booking page (QR + slip, or card), like any approved booking.
+ * (The other choice, paid straight to the shop, is bookings.confirmOffline.)
+ */
+export async function approveForPayment(auth, number, { note }, ctx) {
+  const settings = await getSettings();
+  return withTransaction(
+    async (db) => {
+      const { rows } = await db.query(`${BOOKING_SELECT} WHERE b.booking_number = $1 AND b.deleted_at IS NULL`, [number]);
+      const b = rows[0];
+      if (!b) throw NotFound("Booking");
+      await db.query("SELECT 1 FROM bookings WHERE id = $1 FOR UPDATE", [b.id]);
+      if (b.status !== "PENDING" || new Date(b.hold_expires_at) < new Date()) throw Conflict("BOOKING_NOT_PENDING", "การจองนี้หมดเวลาหรือไม่ได้รอชำระแล้ว");
+      if (b.review_status === "APPROVED") throw Conflict("ALREADY_APPROVED", "การจองนี้อนุมัติแล้ว รอลูกค้าชำระเงิน");
+      if (!bookingDto(b).documents?.complete) throw Conflict("DOCUMENTS_REQUIRED", "แนบรูปบัตรและใบขับขี่ของผู้ขับคนที่ 1 ให้ครบก่อนอนุมัติ");
+      await approveTx(db, b, auth, note, settings);
+      await db.query(
+        "INSERT INTO outbox_events (aggregate_type, aggregate_id, event_type, payload) VALUES ('booking', $1, 'booking.approved', $2)",
+        [b.id, JSON.stringify({ note: note ?? null, byStaff: true })],
+      );
+      await recordAudit(db, ctx, { action: "booking.approved_for_payment", entityType: "booking", entityId: b.id, after: { note: note ?? null } });
+      const { rows: out } = await db.query(`${BOOKING_SELECT} WHERE b.id = $1`, [b.id]);
+      return bookingDto(out[0]);
+    },
+    { actorId: auth.user.id },
+  );
+}
+
 export async function decide(auth, bookingId, { decision, note }, ctx) {
   const settings = await getSettings();
   return withTransaction(
@@ -39,17 +84,7 @@ export async function decide(auth, bookingId, { decision, note }, ctx) {
       if (b.review_status !== "SUBMITTED") throw Conflict("NOT_SUBMITTED", "ลูกค้ายังไม่ได้ส่งเอกสาร หรือการจองนี้ถูกตรวจไปแล้ว");
 
       if (decision === "approve") {
-        const { rows: h } = await db.query(
-          `UPDATE bookings SET review_status = 'APPROVED', approved_at = now(), approved_by = $2, review_note = $3,
-                  hold_expires_at = now() + make_interval(hours => $4)
-            WHERE id = $1 RETURNING hold_expires_at`,
-          [b.id, auth.user.id, note ?? null, Number(settings["booking.payment_hold_hours"])],
-        );
-        await notify(db, b.user_id, {
-          type: "BOOKING_APPROVED", bookingId: b.id,
-          title: "เอกสารผ่านการตรวจสอบแล้ว",
-          body: `การจอง ${b.booking_number} (${b.brand} ${b.model})\nกรุณาโอนค่าจอง ${bahtText(dueNow(b))} บาท ภายใน ${until(h[0].hold_expires_at)} เพื่อยืนยันการจอง (โอน = จอง)\nกดลิงก์ด้านล่างเพื่อสแกน QR และแนบสลิป`,
-        });
+        await approveTx(db, b, auth, note, settings);
       } else {
         if (!note) throw BadRequest("บอกลูกค้าว่าต้องแก้ไขอะไร");
         await db.query("UPDATE bookings SET review_status = 'CHANGES_REQUESTED', review_note = $2 WHERE id = $1", [b.id, note]);

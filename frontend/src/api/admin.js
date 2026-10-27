@@ -81,3 +81,5 @@ export const staffCreateBooking = (body) => postJson('/admin/bookings', body)
 export const balanceRefresh = (number) => postJson(`/admin/bookings/${number}/balance-refresh`, {})
 export const balanceLink = (number) => postJson(`/admin/bookings/${number}/balance-link`, {})
 export const confirmOffline = (number, body) => postJson(`/admin/bookings/${number}/confirm-offline`, body)
+// staff booking, customer pays through the system: approve now, the customer pays the fee online
+export const requestPayment = (number, body = {}) => postJson(`/admin/bookings/${number}/request-payment`, body)

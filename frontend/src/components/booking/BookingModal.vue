@@ -1,7 +1,7 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { createBooking, getBooking, getBookingDefaults, submitForReview } from '@/api/bookings'
-import { confirmOffline, staffCreateBooking } from '@/api/admin'
+import { confirmOffline, requestPayment, staffCreateBooking } from '@/api/admin'
 import { useAuthStore } from '@/stores/auth'
 import { money, toLocalInput } from '@/utils/format'
 import { useI18n } from '@/i18n'
@@ -24,7 +24,7 @@ const props = defineProps({
   vehicle: { type: Object, default: null },
   dates: { type: Object, default: null }, // { from: 'YYYY-MM-DD', to: 'YYYY-MM-DD' } from the calendar
   resumeNumber: { type: String, default: null },
-  // back office: staff fill the form in for a customer who pays outside the system
+  // back office: staff fill the form in for a customer, who pays outside the system or online
   staff: { type: Boolean, default: false },
 })
 const emit = defineEmits(['close'])
@@ -254,7 +254,10 @@ async function submit() {
   }
 }
 
-// Staff: the customer paid outside the system; record it and confirm straight away.
+// Staff choose how the customer pays:
+//   direct: outside the system (transfer to the shop's account / cash) → record it and confirm now;
+//   online: through the system → approve now, the customer pays the fee from their booking page.
+const staffMode = ref('direct')
 const paidBaht = ref(0)
 const paidMethod = ref('transfer')
 const paidNote = ref('')
@@ -263,11 +266,13 @@ async function confirmStaff() {
   busy.value = true
   error.value = ''
   try {
-    booking.value = await confirmOffline(booking.value.number, {
-      paidMinor: Math.round(Number(paidBaht.value || 0) * 100),
-      method: paidMethod.value,
-      note: paidNote.value.trim() || undefined,
-    })
+    booking.value = staffMode.value === 'online'
+      ? await requestPayment(booking.value.number, { note: paidNote.value.trim() || undefined })
+      : await confirmOffline(booking.value.number, {
+          paidMinor: Math.round(Number(paidBaht.value || 0) * 100),
+          method: paidMethod.value,
+          note: paidNote.value.trim() || undefined,
+        })
     step.value = 3
     scroller.value?.scrollTo({ top: 0 })
   } catch (err) {
@@ -538,8 +543,9 @@ const HEADS = { 1: ['car', 'bk.head1'], 2: ['camera', 'bk.head2'], 3: ['check', 
         <!-- 3. sent for review -->
         <div v-else-if="step === 3 && booking" class="sent">
           <span class="badge"><Icon name="check" :size="26" /></span>
-          <h3>{{ staff ? t('bk.staffConfirmedTitle') : t('bk.sentTitle') }}</h3>
-          <p v-if="staff">{{ t('bk.staffConfirmedBody', { paid: money(Math.round(Number(paidBaht || 0) * 100), booking.money.currency) }) }}</p>
+          <h3>{{ !staff ? t('bk.sentTitle') : staffMode === 'online' ? t('bk.staffApprovedTitle') : t('bk.staffConfirmedTitle') }}</h3>
+          <p v-if="staff && staffMode === 'online'">{{ t('bk.staffApprovedBody', { fee: money(booking.money.dueNowMinor, booking.money.currency) }) }}</p>
+          <p v-else-if="staff">{{ t('bk.staffConfirmedBody', { paid: money(Math.round(Number(paidBaht || 0) * 100), booking.money.currency) }) }}</p>
           <p v-else>{{ t('bk.sentBody', { fee: money(booking.money.dueNowMinor, booking.money.currency) }) }}</p>
           <dl class="sum">
             <div><dt>{{ t('bk.number') }}</dt><dd>{{ booking.number }}</dd></div>
@@ -572,17 +578,24 @@ const HEADS = { 1: ['car', 'bk.head1'], 2: ['camera', 'bk.head2'], 3: ['check', 
         </template>
         <template v-else-if="step === 2 && booking?.documents && staff">
           <div class="staff-pay">
-            <label class="f"><span>{{ t('bk.staffPaid') }}</span><input v-model.number="paidBaht" type="number" min="0" step="1" inputmode="numeric" /></label>
-            <div class="seg" role="radiogroup">
-              <label :class="{ on: paidMethod === 'transfer' }"><input v-model="paidMethod" type="radio" value="transfer" />{{ t('bk.staffTransfer') }}</label>
-              <label :class="{ on: paidMethod === 'cash' }"><input v-model="paidMethod" type="radio" value="cash" />{{ t('bk.staffCash') }}</label>
+            <strong class="how">{{ t('bk.staffHow') }}</strong>
+            <div class="seg modes" role="radiogroup" :aria-label="t('bk.staffHow')">
+              <label :class="{ on: staffMode === 'direct' }"><input v-model="staffMode" type="radio" value="direct" />{{ t('bk.staffModeDirect') }}</label>
+              <label :class="{ on: staffMode === 'online' }"><input v-model="staffMode" type="radio" value="online" />{{ t('bk.staffModeOnline') }}</label>
             </div>
+            <template v-if="staffMode === 'direct'">
+              <label class="f"><span>{{ t('bk.staffPaid') }}</span><input v-model.number="paidBaht" type="number" min="0" step="1" inputmode="numeric" /></label>
+              <div class="seg" role="radiogroup">
+                <label :class="{ on: paidMethod === 'transfer' }"><input v-model="paidMethod" type="radio" value="transfer" />{{ t('bk.staffTransfer') }}</label>
+                <label :class="{ on: paidMethod === 'cash' }"><input v-model="paidMethod" type="radio" value="cash" />{{ t('bk.staffCash') }}</label>
+              </div>
+            </template>
             <label class="f"><span>{{ t('bk.staffNote') }}</span><input v-model="paidNote" type="text" maxlength="300" /></label>
-            <small class="hint">{{ t('bk.staffPaidHint') }}</small>
+            <small class="hint">{{ staffMode === 'online' ? t('bk.staffOnlineHint', { fee: money(booking.money.dueNowMinor, booking.money.currency) }) : t('bk.staffPaidHint') }}</small>
           </div>
           <button type="button" class="primary wide" :disabled="!booking.documents.complete || busy" @click="confirmStaff">
             <span v-if="busy" class="spinner" />
-            <template v-else>{{ booking.documents.complete ? t('bk.staffConfirm') : t('bk.needDocs') }}</template>
+            <template v-else>{{ !booking.documents.complete ? t('bk.needDocs') : staffMode === 'online' ? t('bk.staffApprove') : t('bk.staffConfirm') }}</template>
           </button>
         </template>
         <template v-else-if="step === 2 && booking?.documents">
@@ -1180,6 +1193,16 @@ h3 i,
 .seg {
   display: flex;
   gap: 6px;
+}
+.staff-pay .how {
+  font-size: 0.85rem;
+}
+/* the two payment choices are long: one per line */
+.seg.modes {
+  flex-direction: column;
+}
+.seg.modes label {
+  text-align: left;
 }
 .seg label {
   flex: 1;
