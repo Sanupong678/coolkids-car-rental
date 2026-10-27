@@ -42,7 +42,7 @@ async function line(path, { method = "GET", body, contentType = "application/jso
   return text ? JSON.parse(text) : {};
 }
 
-const LABEL = { logo: "Coolkids", documents: "กรอกเอกสาร", contact: "ติดต่อเรา", promotions: "โปรโมชั่น", cars: "เลือกรถ" };
+const LABEL = { cover: "Coolkids", cars: "เลือกรถที่ใช่", contact: "ติดต่อเรา", bookings: "การจองของฉัน" };
 
 async function upload() {
   if (!config.LINE_MESSAGING_ACCESS_TOKEN || !config.LIFF_ID) throw new Error("Set LINE_MESSAGING_ACCESS_TOKEN and LIFF_ID in .env first");
