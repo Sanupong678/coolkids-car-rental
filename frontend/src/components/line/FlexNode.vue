@@ -76,7 +76,7 @@ const button = computed(() => {
     v-else-if="n.type === 'image'"
     :src="n.url"
     alt=""
-    :style="{ flex, width: '100%', aspectRatio: (n.aspectRatio ?? '1:1').replace(':', '/'), objectFit: n.aspectMode === 'cover' ? 'cover' : 'contain', display: 'block' }"
+    :style="{ flex, width: '100%', aspectRatio: (n.aspectRatio ?? '1:1').replace(':', '/'), objectFit: n.aspectMode === 'cover' ? 'cover' : 'contain', background: n.backgroundColor, display: 'block' }"
   />
   <button v-else-if="n.type === 'button'" type="button" class="b" :style="button" @click="emit('action', n.action)">{{ n.action?.label }}</button>
   <hr v-else-if="n.type === 'separator'" class="sep" :style="{ marginTop: px(n.margin) }" />

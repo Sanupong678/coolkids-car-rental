@@ -57,7 +57,8 @@ function carBubble(v) {
   return {
     type: "bubble",
     size: "kilo",
-    ...(img ? { hero: { type: "image", url: img, size: "full", aspectRatio: "20:13", aspectMode: "cover", action: { type: "uri", uri: liffUrl(`/book/${v.slug}`) } } } : {}),
+    // "fit" on a light ground: the whole car shows (cover cropped the nose and tail)
+    ...(img ? { hero: { type: "image", url: img, size: "full", aspectRatio: "20:13", aspectMode: "fit", backgroundColor: "#F2F3F5", action: { type: "uri", uri: liffUrl(`/book/${v.slug}`) } } } : {}),
     body: {
       type: "box", layout: "vertical", spacing: "sm",
       contents: [
