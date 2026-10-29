@@ -18,3 +18,6 @@ backups/
 .claude/settings.local.json
 .vscode/*
 !.vscode/extensions.json
+
+# OWASP ZAP scan reports (kept locally, not in git)
+zap-*-report.html
