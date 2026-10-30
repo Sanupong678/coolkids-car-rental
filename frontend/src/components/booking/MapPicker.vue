@@ -7,7 +7,7 @@ import Icon from '@/components/ui/Icon.vue'
 import { t } from '@/i18n'
 
 // "เลือกจากแผนที่": the pin stays in the middle and the customer moves the map
-// under it (like ride-hailing apps), jumps to their GPS position, or searches
+// under it (like ride-hailing apps) or taps a spot, jumps to their GPS position, or searches
 // a place name (condo, hotel, mall, road) and picks a result. Each stop
 // is turned into a Thai address by the server; "ใช้ตำแหน่งนี้" hands back
 // { address, lat, lng } to the form field that opened it.
@@ -63,7 +63,9 @@ async function lookup() {
     if (id === lookupId) address.value = r.address
   } catch (err) {
     if (id === lookupId) {
-      address.value = ''
+      // No address for this spot (or the lookup service is busy): the pin itself is
+      // still a valid place, priced from its coordinates, so it can be used as is.
+      address.value = t('map.pinAt', { lat: lat.toFixed(5), lng: lng.toFixed(5) })
       error.value = t(err.status === 429 ? 'map.moveBusy' : 'map.noAddress')
     }
   } finally {
@@ -86,6 +88,7 @@ function onMove() {
 function locate() {
   if (!('geolocation' in navigator)) {
     error.value = t('map.noGeo')
+    if (!address.value) lookup()
     return
   }
   locating.value = true
@@ -98,6 +101,9 @@ function locate() {
     (e) => {
       locating.value = false
       error.value = t(e.code === 1 ? 'map.denied' : 'map.geoFail')
+      // No GPS (e.g. a desk computer that refused): start from the spot on screen,
+      // otherwise "ใช้ตำแหน่งนี้" stays disabled until the map is dragged.
+      if (!address.value && !looking.value) lookup()
     },
     { enableHighAccuracy: true, timeout: 10_000, maximumAge: 30_000 },
   )
@@ -127,6 +133,8 @@ onMounted(() => {
     results.value = null
   })
   map.on('moveend', onMove)
+  // a tap puts the pin there (the pin is the map's centre)
+  map.on('click', (e) => map.panTo(e.latlng))
   // The dialog finishes laying out after mount: let Leaflet measure it again.
   setTimeout(() => map.invalidateSize(), 50)
   if (props.start) lookup()

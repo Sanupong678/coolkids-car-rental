@@ -440,17 +440,19 @@ h1 {
 body.admin-page {
   background: #0b1124;
 }
-/* Back-office form controls follow the glass theme (they live in several panels). */
-.admin input:not([type='checkbox']):not([type='radio']):not([type='file']),
-.admin select,
-.admin textarea {
+/* Back-office form controls follow the glass theme (they live in several panels).
+   Not inside the booking form (.bk, opened by "จองให้ลูกค้า"): it keeps the site's light
+   theme, where light text on its white fields was unreadable. */
+.admin input:not([type='checkbox']):not([type='radio']):not([type='file']):not(.bk *),
+.admin select:not(.bk *),
+.admin textarea:not(.bk *) {
   color: var(--viz-text);
 }
-.admin select option {
+.admin select:not(.bk *) option {
   background: #161b2e;
   color: var(--viz-text);
 }
-.admin input[type='date']::-webkit-calendar-picker-indicator {
+.admin input[type='date']:not(.bk *)::-webkit-calendar-picker-indicator {
   filter: invert(1) opacity(0.7);
 }
 </style>

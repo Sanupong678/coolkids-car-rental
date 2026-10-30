@@ -11,5 +11,5 @@ add_header X-Content-Type-Options "nosniff" always;
 add_header Referrer-Policy "strict-origin-when-cross-origin" always;
 add_header Permissions-Policy "geolocation=(self), camera=(), microphone=(), payment=(), usb=(), interest-cohort=()" always;
 add_header Cross-Origin-Opener-Policy "same-origin" always;
-# other sites cannot embed our files in their pages; LINE / Facebook fetch images server-side, unaffected
-add_header Cross-Origin-Resource-Policy "same-site" always;
+# Cross-Origin-Resource-Policy is set by each block in nginx.conf: same-site for the app,
+# cross-origin for the public images that receipts (PDF), e-mails and link previews load.
