@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, nextTick, onMounted, ref } from 'vue'
 import { archiveVehicle, createVehicle, listVehicles, updateVehicle, uploadImage, vehicleMeta } from '@/api/admin'
 import { label, money } from '@/utils/format'
 import Icon from '@/components/ui/Icon.vue'
@@ -39,6 +39,8 @@ const headerH = ref(0)
 function edit(c) {
   headerH.value = document.querySelector('header.header')?.offsetHeight ?? 0
   error.value = ''
+  tried.value = false
+  serverErrors.value = {}
   editing.value = c
     ? { ...EMPTY, ...c, daily: c.dailyRateMinor / 100, hourly: c.hourlyRateMinor ? c.hourlyRateMinor / 100 : null, deposit: c.depositMinor / 100, features: [...c.features], images: [...c.images], originalImages: c.images.join('|'),
         deliveryPerKm: c.deliveryPerKmMinor != null ? c.deliveryPerKmMinor / 100 : null, deliveryMinFee: c.deliveryMinFeeMinor != null ? c.deliveryMinFeeMinor / 100 : null }
@@ -64,9 +66,73 @@ function payload(f) {
   }
 }
 
+// What is still wrong on the form, per field, with the same limits the API checks
+// (admin.routes.js vehicleBase). Shown in red once staff try to save.
+const tried = ref(false)
+const serverErrors = ref({}) // field → message from a rejected save
+const problems = computed(() => {
+  const f = editing.value
+  if (!f) return {}
+  const out = {}
+  const add = (k, msg) => (out[k] ??= msg)
+  const blank = (v) => v == null || String(v).trim() === ''
+  const range = (k, v, min, max, { int = true, required = false, name } = {}) => {
+    if (blank(v)) return required && add(k, `กรอก${name}`)
+    const n = Number(v)
+    if (!Number.isFinite(n)) return add(k, 'ใส่เป็นตัวเลข')
+    if (int && !Number.isInteger(n)) return add(k, 'ใส่เป็นจำนวนเต็ม')
+    if (n < min || n > max) add(k, `ต้องอยู่ระหว่าง ${min.toLocaleString()}–${max.toLocaleString()}`)
+  }
+  if (blank(f.brand)) add('brand', 'กรอกยี่ห้อ')
+  else if (f.brand.trim().length > 40) add('brand', 'ไม่เกิน 40 ตัวอักษร')
+  if (blank(f.model)) add('model', 'กรอกรุ่น')
+  else if (f.model.trim().length > 60) add('model', 'ไม่เกิน 60 ตัวอักษร')
+  if (f.trim && f.trim.trim().length > 60) add('trim', 'ไม่เกิน 60 ตัวอักษร')
+  range('year', f.year, 1990, 2100, { required: true, name: 'ปี' })
+  if (blank(f.licensePlate)) add('licensePlate', 'กรอกทะเบียน')
+  else if (f.licensePlate.trim().length < 2 || f.licensePlate.trim().length > 20) add('licensePlate', 'ทะเบียน 2–20 ตัวอักษร')
+  range('fleetNo', f.fleetNo, 1, 9999)
+  if (blank(f.categorySlug)) add('categorySlug', 'เลือกประเภทรถ')
+  range('daily', f.daily, 1, 1_000_000, { int: false, required: true, name: 'ราคาต่อวัน' })
+  range('hourly', f.hourly, 0.01, 1_000_000, { int: false })
+  range('deposit', f.deposit, 0, 1_000_000, { int: false, required: true, name: 'เงินประกัน (ใส่ 0 ได้)' })
+  range('minRentalDays', f.minRentalDays, 1, 365, { required: true, name: 'จำนวนวันเช่าขั้นต่ำ' })
+  range('maxRentalDays', f.maxRentalDays, 1, 3650)
+  if (!out.minRentalDays && !out.maxRentalDays && !blank(f.maxRentalDays) && Number(f.maxRentalDays) < Number(f.minRentalDays)) {
+    add('maxRentalDays', 'ต้องไม่น้อยกว่าวันเช่าขั้นต่ำ')
+  }
+  range('minDriverAge', f.minDriverAge, 16, 99, { required: true, name: 'อายุผู้ขับขั้นต่ำ' })
+  range('deliveryFreeKm', f.deliveryFreeKm, 0, 500, { int: false })
+  range('deliveryPerKm', f.deliveryPerKm, 0, 1_000_000, { int: false })
+  range('deliveryMinFee', f.deliveryMinFee, 0, 1_000_000, { int: false })
+  range('seats', f.seats, 1, 20, { required: true, name: 'จำนวนที่นั่ง' })
+  range('doors', f.doors, 1, 6)
+  range('luggageLiters', f.luggageLiters, 0, 5000)
+  range('engineCc', f.engineCc, 1, 10000)
+  range('powerHp', f.powerHp, 1, 2000)
+  range('torqueNm', f.torqueNm, 1, 3000)
+  range('fuelEconomy', f.fuelEconomy, 0.1, 99, { int: false })
+  return { ...serverErrors.value, ...out }
+})
+const bad = (k) => (tried.value || serverErrors.value[k]) && problems.value[k]
+// API field names → the form field that shows the message
+const FROM_API = { dailyRateMinor: 'daily', hourlyRateMinor: 'hourly', depositMinor: 'deposit', deliveryPerKmMinor: 'deliveryPerKm', deliveryMinFeeMinor: 'deliveryMinFee' }
+
+async function scrollToFirstProblem() {
+  await nextTick()
+  document.querySelector('.drawer label.bad')?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+}
+
 async function save() {
-  saving.value = true
+  tried.value = true
+  serverErrors.value = {}
   error.value = ''
+  const n = Object.keys(problems.value).length
+  if (n) {
+    error.value = `ยังมี ${n} ช่องที่ต้องแก้ (กรอบสีแดง)`
+    return scrollToFirstProblem()
+  }
+  saving.value = true
   try {
     const f = editing.value
     if (f.id) await updateVehicle(f.id, payload(f))
@@ -74,8 +140,14 @@ async function save() {
     editing.value = null
     await load()
   } catch (err) {
-    const details = err.details ? Object.entries(err.details).map(([k, v]) => `${k}: ${[].concat(v).join(', ')}`) : []
-    error.value = details.length ? details.join(' · ') : err.message
+    const details = Object.entries(err.details ?? {})
+    if (details.length) {
+      serverErrors.value = Object.fromEntries(details.map(([k, v]) => [FROM_API[k] ?? k, [].concat(v).join(', ')]))
+      error.value = `บันทึกไม่ได้: ${details.length} ช่องไม่ถูกต้อง (กรอบสีแดง)`
+      scrollToFirstProblem()
+    } else {
+      error.value = err.message
+    }
   } finally {
     saving.value = false
   }
@@ -217,16 +289,17 @@ const STATUS_CLASS = { ACTIVE: 'ok', DRAFT: 'muted', MAINTENANCE: 'warn', OUT_OF
           <section>
             <h4>ข้อมูลรถ</h4>
             <div class="g3">
-              <label><span>ยี่ห้อ *</span><input v-model="editing.brand" required placeholder="Toyota" /></label>
-              <label><span>รุ่น *</span><input v-model="editing.model" required placeholder="Yaris Ativ" /></label>
-              <label><span>รุ่นย่อย</span><input v-model="editing.trim" placeholder="Premium" /></label>
-              <label><span>ปี *</span><input v-model.number="editing.year" type="number" min="1990" max="2100" /></label>
-              <label><span>ทะเบียน *</span><input v-model="editing.licensePlate" required placeholder="1กข 1234" /></label>
-              <label><span>เลขรถ (#)</span><input v-model.number="editing.fleetNo" type="number" min="1" placeholder="อัตโนมัติ" /></label>
-              <label><span>สี</span><input v-model="editing.color" /></label>
-              <label>
+              <label :class="{ bad: bad('brand') }"><span>ยี่ห้อ *</span><input v-model="editing.brand" required placeholder="Toyota" /><em v-if="bad('brand')" class="why">{{ problems.brand }}</em></label>
+              <label :class="{ bad: bad('model') }"><span>รุ่น *</span><input v-model="editing.model" required placeholder="Yaris Ativ" /><em v-if="bad('model')" class="why">{{ problems.model }}</em></label>
+              <label :class="{ bad: bad('trim') }"><span>รุ่นย่อย</span><input v-model="editing.trim" placeholder="Premium" /><em v-if="bad('trim')" class="why">{{ problems.trim }}</em></label>
+              <label :class="{ bad: bad('year') }"><span>ปี *</span><input v-model.number="editing.year" type="number" min="1990" max="2100" /><em v-if="bad('year')" class="why">{{ problems.year }}</em></label>
+              <label :class="{ bad: bad('licensePlate') }"><span>ทะเบียน *</span><input v-model="editing.licensePlate" required placeholder="1กข 1234" /><em v-if="bad('licensePlate')" class="why">{{ problems.licensePlate }}</em></label>
+              <label :class="{ bad: bad('fleetNo') }"><span>เลขรถ (#)</span><input v-model.number="editing.fleetNo" type="number" min="1" placeholder="อัตโนมัติ" /><em v-if="bad('fleetNo')" class="why">{{ problems.fleetNo }}</em></label>
+              <label :class="{ bad: bad('color') }"><span>สี</span><input v-model="editing.color" /><em v-if="bad('color')" class="why">{{ problems.color }}</em></label>
+              <label :class="{ bad: bad('categorySlug') }">
                 <span>ประเภท *</span>
                 <select v-model="editing.categorySlug"><option v-for="c in meta.categories" :key="c.slug" :value="c.slug">{{ c.name }}</option></select>
+                <em v-if="bad('categorySlug')" class="why">{{ problems.categorySlug }}</em>
               </label>
               <label>
                 <span>สถานะ</span>
@@ -240,12 +313,12 @@ const STATUS_CLASS = { ACTIVE: 'ok', DRAFT: 'muted', MAINTENANCE: 'warn', OUT_OF
           <section>
             <h4>ราคาและเงื่อนไข</h4>
             <div class="g3">
-              <label><span>ราคาต่อวัน (บาท) *</span><input v-model.number="editing.daily" type="number" min="1" step="10" /></label>
-              <label><span>ราคาต่อชั่วโมง (บาท)</span><input v-model.number="editing.hourly" type="number" min="0" step="10" /></label>
-              <label><span>เงินประกัน (บาท) *</span><input v-model.number="editing.deposit" type="number" min="0" step="100" /></label>
-              <label><span>เช่าขั้นต่ำ (วัน)</span><input v-model.number="editing.minRentalDays" type="number" min="1" /></label>
-              <label><span>เช่าสูงสุด (วัน)</span><input v-model.number="editing.maxRentalDays" type="number" min="1" /></label>
-              <label><span>อายุผู้ขับขั้นต่ำ</span><input v-model.number="editing.minDriverAge" type="number" min="18" max="99" /></label>
+              <label :class="{ bad: bad('daily') }"><span>ราคาต่อวัน (บาท) *</span><input v-model.number="editing.daily" type="number" min="1" step="any" /><em v-if="bad('daily')" class="why">{{ problems.daily }}</em></label>
+              <label :class="{ bad: bad('hourly') }"><span>ราคาต่อชั่วโมง (บาท)</span><input v-model.number="editing.hourly" type="number" min="0" step="any" /><em v-if="bad('hourly')" class="why">{{ problems.hourly }}</em></label>
+              <label :class="{ bad: bad('deposit') }"><span>เงินประกัน (บาท) *</span><input v-model.number="editing.deposit" type="number" min="0" step="any" /><em v-if="bad('deposit')" class="why">{{ problems.deposit }}</em></label>
+              <label :class="{ bad: bad('minRentalDays') }"><span>เช่าขั้นต่ำ (วัน)</span><input v-model.number="editing.minRentalDays" type="number" min="1" /><em v-if="bad('minRentalDays')" class="why">{{ problems.minRentalDays }}</em></label>
+              <label :class="{ bad: bad('maxRentalDays') }"><span>เช่าสูงสุด (วัน)</span><input v-model.number="editing.maxRentalDays" type="number" min="1" /><em v-if="bad('maxRentalDays')" class="why">{{ problems.maxRentalDays }}</em></label>
+              <label :class="{ bad: bad('minDriverAge') }"><span>อายุผู้ขับขั้นต่ำ</span><input v-model.number="editing.minDriverAge" type="number" min="18" max="99" /><em v-if="bad('minDriverAge')" class="why">{{ problems.minDriverAge }}</em></label>
             </div>
           </section>
 
@@ -253,28 +326,28 @@ const STATUS_CLASS = { ACTIVE: 'ok', DRAFT: 'muted', MAINTENANCE: 'warn', OUT_OF
             <h4>การส่งรถถึงที่</h4>
             <p class="hint">เว้นว่างเพื่อใช้ค่าเริ่มต้นของร้าน · ลูกค้าปักหมุดจุดส่งบนแผนที่ ระบบคิดระยะจากสาขาของรถคันนี้</p>
             <div class="g3">
-              <label><span>ส่งฟรี (กม. แรก)</span><input v-model.number="editing.deliveryFreeKm" type="number" min="0" step="0.5" :placeholder="meta?.deliveryDefaults ? String(meta.deliveryDefaults.freeKm) : ''" /></label>
-              <label><span>ค่าส่งต่อ กม. (บาท)</span><input v-model.number="editing.deliveryPerKm" type="number" min="0" step="1" :placeholder="meta?.deliveryDefaults ? String(meta.deliveryDefaults.perKmMinor / 100) : ''" /></label>
-              <label><span>ค่าส่งขั้นต่ำ (บาท)</span><input v-model.number="editing.deliveryMinFee" type="number" min="0" step="10" :placeholder="meta?.deliveryDefaults ? String(meta.deliveryDefaults.minFeeMinor / 100) : ''" /></label>
+              <label :class="{ bad: bad('deliveryFreeKm') }"><span>ส่งฟรี (กม. แรก)</span><input v-model.number="editing.deliveryFreeKm" type="number" min="0" step="any" :placeholder="meta?.deliveryDefaults ? String(meta.deliveryDefaults.freeKm) : ''" /><em v-if="bad('deliveryFreeKm')" class="why">{{ problems.deliveryFreeKm }}</em></label>
+              <label :class="{ bad: bad('deliveryPerKm') }"><span>ค่าส่งต่อ กม. (บาท)</span><input v-model.number="editing.deliveryPerKm" type="number" min="0" step="1" :placeholder="meta?.deliveryDefaults ? String(meta.deliveryDefaults.perKmMinor / 100) : ''" /><em v-if="bad('deliveryPerKm')" class="why">{{ problems.deliveryPerKm }}</em></label>
+              <label :class="{ bad: bad('deliveryMinFee') }"><span>ค่าส่งขั้นต่ำ (บาท)</span><input v-model.number="editing.deliveryMinFee" type="number" min="0" step="any" :placeholder="meta?.deliveryDefaults ? String(meta.deliveryDefaults.minFeeMinor / 100) : ''" /><em v-if="bad('deliveryMinFee')" class="why">{{ problems.deliveryMinFee }}</em></label>
             </div>
           </section>
 
           <section>
             <h4>สเปก</h4>
             <div class="g3">
-              <label><span>เกียร์</span><select v-model="editing.transmission"><option value="AUTOMATIC">ออโต้</option><option value="MANUAL">ธรรมดา</option></select></label>
+              <label :class="{ bad: bad('transmission') }"><span>เกียร์</span><select v-model="editing.transmission"><option value="AUTOMATIC">ออโต้</option><option value="MANUAL">ธรรมดา</option></select><em v-if="bad('transmission')" class="why">{{ problems.transmission }}</em></label>
               <label>
                 <span>เชื้อเพลิง</span>
                 <select v-model="editing.fuel"><option v-for="f in ['PETROL', 'DIESEL', 'HYBRID', 'PLUG_IN_HYBRID', 'ELECTRIC']" :key="f" :value="f">{{ label(f) }}</option></select>
               </label>
-              <label><span>ขับเคลื่อน</span><select v-model="editing.drive"><option v-for="d in ['FWD', 'RWD', 'AWD', '4WD']" :key="d">{{ d }}</option></select></label>
-              <label><span>ที่นั่ง</span><input v-model.number="editing.seats" type="number" min="1" max="20" /></label>
-              <label><span>ประตู</span><input v-model.number="editing.doors" type="number" min="1" max="6" /></label>
-              <label><span>ท้ายรถ (ลิตร)</span><input v-model.number="editing.luggageLiters" type="number" min="0" /></label>
-              <label><span>เครื่องยนต์ (cc)</span><input v-model.number="editing.engineCc" type="number" min="1" /></label>
-              <label><span>แรงม้า</span><input v-model.number="editing.powerHp" type="number" min="1" /></label>
-              <label><span>แรงบิด (Nm)</span><input v-model.number="editing.torqueNm" type="number" min="1" /></label>
-              <label><span>สิ้นเปลือง (ล./100 กม.)</span><input v-model.number="editing.fuelEconomy" type="number" min="0.1" step="0.1" /></label>
+              <label :class="{ bad: bad('drive') }"><span>ขับเคลื่อน</span><select v-model="editing.drive"><option v-for="d in ['FWD', 'RWD', 'AWD', '4WD']" :key="d">{{ d }}</option></select><em v-if="bad('drive')" class="why">{{ problems.drive }}</em></label>
+              <label :class="{ bad: bad('seats') }"><span>ที่นั่ง</span><input v-model.number="editing.seats" type="number" min="1" max="20" /><em v-if="bad('seats')" class="why">{{ problems.seats }}</em></label>
+              <label :class="{ bad: bad('doors') }"><span>ประตู</span><input v-model.number="editing.doors" type="number" min="1" max="6" /><em v-if="bad('doors')" class="why">{{ problems.doors }}</em></label>
+              <label :class="{ bad: bad('luggageLiters') }"><span>ท้ายรถ (ลิตร)</span><input v-model.number="editing.luggageLiters" type="number" min="0" /><em v-if="bad('luggageLiters')" class="why">{{ problems.luggageLiters }}</em></label>
+              <label :class="{ bad: bad('engineCc') }"><span>เครื่องยนต์ (cc)</span><input v-model.number="editing.engineCc" type="number" min="1" /><em v-if="bad('engineCc')" class="why">{{ problems.engineCc }}</em></label>
+              <label :class="{ bad: bad('powerHp') }"><span>แรงม้า</span><input v-model.number="editing.powerHp" type="number" min="1" /><em v-if="bad('powerHp')" class="why">{{ problems.powerHp }}</em></label>
+              <label :class="{ bad: bad('torqueNm') }"><span>แรงบิด (Nm)</span><input v-model.number="editing.torqueNm" type="number" min="1" /><em v-if="bad('torqueNm')" class="why">{{ problems.torqueNm }}</em></label>
+              <label :class="{ bad: bad('fuelEconomy') }"><span>สิ้นเปลือง (ล./100 กม.)</span><input v-model.number="editing.fuelEconomy" type="number" min="0.1" step="any" /><em v-if="bad('fuelEconomy')" class="why">{{ problems.fuelEconomy }}</em></label>
             </div>
           </section>
 
@@ -290,7 +363,7 @@ const STATUS_CLASS = { ACTIVE: 'ok', DRAFT: 'muted', MAINTENANCE: 'warn', OUT_OF
           <p v-if="error" class="err" role="alert">{{ error }}</p>
           <button v-if="editing.id" type="button" class="danger" @click="archive">ซ่อนรถถาวร</button>
           <button type="button" class="cancel" :disabled="saving" @click="editing = null">ยกเลิก</button>
-          <button type="submit" class="save" :disabled="saving || uploading">{{ saving ? 'กำลังบันทึก…' : 'บันทึก' }}</button>
+          <button type="submit" class="save" :disabled="saving || !!uploading">{{ saving ? 'กำลังบันทึก…' : 'บันทึก' }}</button>
         </footer>
       </form>
     </div>
@@ -674,6 +747,20 @@ textarea {
   flex-basis: 100%;
   color: var(--bad);
   font-size: 0.85rem;
+}
+/* a field that is missing or out of range (after the first save attempt) */
+label.bad > span:first-child {
+  color: var(--bad);
+}
+label.bad input,
+label.bad select {
+  border-color: var(--bad);
+  box-shadow: 0 0 0 1px var(--bad);
+}
+.why {
+  color: var(--bad);
+  font-size: 0.75rem;
+  font-style: normal;
 }
 @keyframes slide {
   from {
