@@ -237,6 +237,15 @@ export function adminRoutes() {
       res.json({ data: await review.approveForPayment(req.auth, req.valid.params.number, req.valid.body, auditContext(req)) });
     },
   );
+  // "Follow in LINE": a one-time link staff send in the LINE chat; opening it moves the booking to the customer's LINE account.
+  router.post(
+    "/bookings/:number/claim-link",
+    requirePermission(P.BOOKINGS_WRITE),
+    validate({ params: numberParam }),
+    async (req, res) => {
+      res.json({ data: await bookings.createClaimLink(req.auth, req.valid.params.number, auditContext(req)) });
+    },
+  );
   // At hand-over: a Stripe link (and its QR) the customer pays the rent balance + deposit with on their phone.
   router.post(
     "/bookings/:number/balance-link",

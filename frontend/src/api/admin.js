@@ -82,4 +82,6 @@ export const balanceRefresh = (number) => postJson(`/admin/bookings/${number}/ba
 export const balanceLink = (number) => postJson(`/admin/bookings/${number}/balance-link`, {})
 export const confirmOffline = (number, body) => postJson(`/admin/bookings/${number}/confirm-offline`, body)
 // staff booking, customer pays through the system: approve now, the customer pays the fee online
+// one-time "follow in LINE" link for a booking staff made → { url, expiresAt }
+export const claimLink = (number) => postJson(`/admin/bookings/${number}/claim-link`, {})
 export const requestPayment = (number, body = {}) => postJson(`/admin/bookings/${number}/request-payment`, body)

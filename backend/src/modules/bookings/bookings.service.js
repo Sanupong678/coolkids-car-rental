@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { config } from "../../config/env.js";
 import { pool, withTransaction } from "../../db/pool.js";
-import { encryptPII, hmac, last4, sha256 } from "../../shared/crypto.js";
+import { encryptPII, hmac, last4, randomToken, sha256 } from "../../shared/crypto.js";
 import { AppError, BadRequest, Conflict, Forbidden, NotFound } from "../../shared/errors.js";
 import { distanceMeters, minutesToDrive } from "../../shared/geo.js";
 import { getSettings, vehicleFeePolicy } from "../../shared/settings.js";
@@ -593,6 +593,74 @@ export async function submitForReview(auth, number, ctx) {
 
 export async function getBooking(auth, number) {
   return bookingDto(await loadBooking(pool, number, auth));
+}
+
+// ---------------------------------------------------------------- follow in LINE (staff bookings)
+// Staff send the customer a one-time link in the LINE chat. Opened inside LINE the site
+// signs the customer in with LINE by itself, and the booking moves to that account,
+// so its status messages reach their LINE. Only the code's hash is stored.
+
+const CLAIM_DAYS = 7;
+const CLOSED = ["COMPLETED", "CANCELLED", "EXPIRED", "REFUNDED"];
+export const claimUrl = (token) =>
+  config.LIFF_ID ? `https://liff.line.me/${config.LIFF_ID}/claim/${token}` : `${config.FRONTEND_URL.replace(/\/$/, "")}/claim/${token}`;
+
+/** A fresh link for one booking (an older one stops working). */
+export async function createClaimLink(staff, number, ctx) {
+  return withTransaction(
+    async (db) => {
+      const b = await loadBooking(db, number, staff, { lock: true });
+      if (CLOSED.includes(b.status)) throw Conflict("BOOKING_CLOSED", "การจองนี้ปิดไปแล้ว ส่งลิงก์ไม่ได้");
+      const token = randomToken(24);
+      const { rows } = await db.query(
+        `UPDATE bookings SET claim_token_hash = $2, claim_expires_at = now() + make_interval(days => $3)
+          WHERE id = $1 RETURNING claim_expires_at`,
+        [b.id, sha256(token), CLAIM_DAYS],
+      );
+      await recordAudit(db, ctx, { action: "booking.claim_link_created", entityType: "booking", entityId: b.id });
+      return { url: claimUrl(token), expiresAt: rows[0].claim_expires_at };
+    },
+    { actorId: staff.user.id },
+  );
+}
+
+/** The customer opened the link: the booking (and its payments, contract, messages) becomes theirs. */
+export async function claimBooking(auth, token, ctx) {
+  const number = await withTransaction(
+    async (db) => {
+      const { rows } = await db.query(
+        `SELECT id, booking_number, user_id, customer_identity_id, claim_expires_at, status FROM bookings
+          WHERE claim_token_hash = $1 AND deleted_at IS NULL FOR UPDATE`,
+        [sha256(token)],
+      );
+      const b = rows[0];
+      if (!b || new Date(b.claim_expires_at) < new Date() || CLOSED.includes(b.status)) {
+        throw new AppError(410, "CLAIM_LINK_INVALID", "ลิงก์นี้ใช้ไม่ได้แล้ว (หมดอายุหรือใช้ไปแล้ว) กรุณาขอลิงก์ใหม่จากแอดมิน");
+      }
+      const to = auth.user.id;
+      if (b.user_id !== to) {
+        for (const table of ["payments", "contracts", "promotion_redemptions"]) {
+          await db.query(`UPDATE ${table} SET user_id = $2 WHERE booking_id = $1`, [b.id, to]);
+        }
+        await db.query("UPDATE notifications SET user_id = $2 WHERE entity_type = 'booking' AND entity_id = $1", [b.id, to]);
+        // the renter details move with it; not "current" so they never replace the customer's own
+        if (b.customer_identity_id) {
+          await db.query("UPDATE customer_identities SET user_id = $2, is_current = false WHERE id = $1", [b.customer_identity_id, to]);
+        }
+        await db.query("UPDATE bookings SET user_id = $2 WHERE id = $1", [b.id, to]);
+      }
+      await db.query("UPDATE bookings SET claim_token_hash = NULL, claim_expires_at = NULL, claimed_at = now() WHERE id = $1", [b.id]);
+      await notify(db, to, {
+        type: "BOOKING_LINKED", bookingId: b.id,
+        title: "ติดตามการจองใน LINE แล้ว",
+        body: `การจอง ${b.booking_number}: ต่อจากนี้เราจะแจ้งสถานะการจองทาง LINE นี้`,
+      });
+      await recordAudit(db, ctx, { action: "booking.claimed", entityType: "booking", entityId: b.id, before: { userId: b.user_id }, after: { userId: to } });
+      return b.booking_number;
+    },
+    { actorId: auth.user.id },
+  );
+  return getBooking(auth, number);
 }
 
 // ---------------------------------------------------------------- cancel (customer)

@@ -20,6 +20,8 @@ const router = createRouter({
     { path: '/book', name: 'book', component: () => import('@/views/BookView.vue'), meta: { title: 'จองรถ' } },
     { path: '/book/:slug', name: 'book-car', component: () => import('@/views/BookView.vue'), meta: { title: 'เลือกวันเช่า' } },
     // Rich menu "กรอกเอกสาร": the customer's booking in progress, else their bookings.
+    // "follow in LINE" link staff send for a booking they made (LIFF signs the customer in)
+    { path: '/claim/:token', name: 'claim', component: () => import('@/views/ClaimView.vue'), meta: { requiresAuth: true } },
     {
       path: '/continue',
       name: 'continue',

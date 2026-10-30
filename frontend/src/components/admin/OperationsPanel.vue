@@ -8,6 +8,7 @@ import Icon from '@/components/ui/Icon.vue'
 import DocumentsDialog from '@/components/admin/ops/DocumentsDialog.vue'
 import MileageDialog from '@/components/admin/ops/MileageDialog.vue'
 import PaymentDialog from '@/components/admin/ops/PaymentDialog.vue'
+import LineClaimLink from '@/components/admin/LineClaimLink.vue'
 import { documentUrl } from '@/api/bookings'
 
 // Dispatch board. Staff press the buttons; the customer's tracker updates:
@@ -44,6 +45,9 @@ const date = ref(todayIso())
 const bucket = ref('today')
 const data = ref(null)
 const busyId = ref(null)
+// booking whose "follow in LINE" link panel is open
+const lineFor = ref(null)
+const LINE_CLOSED = ['COMPLETED', 'CANCELLED', 'EXPIRED', 'REFUNDED']
 const error = ref('')
 let timer
 
@@ -210,6 +214,9 @@ const onlineBalance = (b) =>
           >
             <Icon :name="ACTION[st][1]" :size="14" /> {{ ACTION[st][0] }}
           </button>
+          <button v-if="!LINE_CLOSED.includes(b.status)" type="button" class="ghost" :aria-expanded="lineFor === b.number" @click="lineFor = lineFor === b.number ? null : b.number">
+            <Icon name="share" :size="14" /> ลิงก์ LINE
+          </button>
           <span v-if="b.documents" class="docs">
             <a
               v-for="k in b.documents.required"
@@ -224,6 +231,7 @@ const onlineBalance = (b) =>
             </a>
           </span>
         </div>
+        <div v-if="lineFor === b.number" class="line-link"><LineClaimLink :number="b.number" /></div>
       </li>
     </ul>
     <p v-else-if="data" class="none">ไม่มีรายการ</p>
@@ -510,6 +518,13 @@ const onlineBalance = (b) =>
   align-items: center;
   gap: 4px;
   font-size: 0.8rem;
+}
+/* light panel under the row so the link and its copy button read clearly on the dark board */
+.line-link {
+  margin-top: 10px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: #f7f8fa;
 }
 .act {
   display: flex;

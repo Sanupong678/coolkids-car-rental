@@ -29,6 +29,7 @@ export const LINE_TYPES = new Set([
   "BOOKING_IN_DELIVERY", // car left the branch
   "DELIVERY_NEAR",
   "DELIVERY_ARRIVED",
+  "BOOKING_LINKED", // the customer opened the staff's "follow in LINE" link
 ]);
 
 export const bookingLink = (number) =>

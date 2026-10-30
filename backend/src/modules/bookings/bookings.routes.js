@@ -86,6 +86,17 @@ export function bookingRoutes() {
     res.json({ data: await service.submitForReview(req.auth, req.valid.params.number, auditContext(req)) });
   });
 
+  // The customer opened a staff booking's "follow in LINE" link: the booking becomes theirs.
+  router.post(
+    "/bookings/claim",
+    requireAuth,
+    paymentLimiter,
+    validate({ body: z.object({ token: z.string().regex(/^[A-Za-z0-9_-]{20,64}$/) }) }),
+    async (req, res) => {
+      res.json({ data: await service.claimBooking(req.auth, req.valid.body.token, auditContext(req)) });
+    },
+  );
+
   // The renter cancels (unpaid, or paid but not yet being prepared); staff handle any refund.
   router.post(
     "/bookings/:number/cancel",

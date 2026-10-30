@@ -556,6 +556,12 @@ const S = {
     deposit: ['มัดจำ {deposit}', 'deposit {deposit}', '押金 {deposit}'],
     specs: ['สเปก', 'Specifications', '参数'],
   },
+  claim: {
+    done: ['ติดตามการจองใน LINE แล้ว', 'You’re following this booking in LINE', '已在 LINE 中关注此预订'],
+    doneBody: ['การจองนี้อยู่ในบัญชีของคุณแล้ว ต่อจากนี้เราจะแจ้งทุกขั้นตอนทาง LINE', 'This booking is now in your account; every update will come to you on LINE', '此预订已加入您的账户，后续每一步都会通过 LINE 通知您'],
+    open: ['ดูการจอง', 'View booking', '查看预订'],
+    failed: ['เปิดลิงก์ไม่สำเร็จ', 'This link didn’t work', '链接无法使用'],
+  },
   acct: {
     title: ['การจองของฉัน', 'My bookings', '我的预订'],
     none: ['ยังไม่มีการจอง', 'No bookings yet', '暂无预订'],

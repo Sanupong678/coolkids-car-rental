@@ -225,3 +225,53 @@ describe("rent balance + deposit paid online after confirmation", () => {
     assert.equal(res.body.error.code, "NOTHING_DUE");
   });
 });
+
+describe("follow in LINE: staff send a one-time link, the customer's account takes the booking", () => {
+  const admin = request.agent(app);
+  const customer = request.agent(app);
+  const other = request.agent(app);
+  let number;
+  let token;
+
+  before(async () => {
+    await admin.post("/api/v1/auth/login").set("Origin", ORIGIN).send({ login: "admin", password: "1234" }).expect(204);
+    await customer.post("/api/v1/auth/register").set("Origin", ORIGIN).send({ fullName: "Line Follower", email: "follow@example.com", password: "password-123" }).expect(201);
+    await other.post("/api/v1/auth/register").set("Origin", ORIGIN).send({ fullName: "Someone Else", email: "else@example.com", password: "password-123" }).expect(201);
+    const res = await admin.post("/api/v1/admin/bookings").set("Origin", ORIGIN)
+      .send(bookingBody({ pickupAt: inDays(60), returnAt: inDays(62), customer: { ...bookingBody().customer, phone: "0844445555" } })).expect(201);
+    number = res.body.data.number;
+  });
+
+  test("only staff can make a link; it is a LINE (LIFF) or site URL with a one-time code", async () => {
+    await other.post(`/api/v1/admin/bookings/${number}/claim-link`).set("Origin", ORIGIN).send({}).expect(403);
+    const first = (await admin.post(`/api/v1/admin/bookings/${number}/claim-link`).set("Origin", ORIGIN).send({}).expect(200)).body.data;
+    const res = (await admin.post(`/api/v1/admin/bookings/${number}/claim-link`).set("Origin", ORIGIN).send({}).expect(200)).body.data;
+    assert.match(res.url, /\/claim\/[A-Za-z0-9_-]{20,}$/);
+    token = res.url.split("/claim/")[1];
+    const oldToken = first.url.split("/claim/")[1];
+    const stale = await customer.post("/api/v1/bookings/claim").set("Origin", ORIGIN).send({ token: oldToken }).expect(410);
+    assert.equal(stale.body.error.code, "CLAIM_LINK_INVALID", "a newer link replaces the old one");
+    const { rows } = await pool.query("SELECT claim_token_hash FROM bookings WHERE booking_number = $1", [number]);
+    assert.ok(!rows[0].claim_token_hash.toString("latin1").includes(token), "only the hash is stored");
+  });
+
+  test("the customer opens it: the booking, its contract and its messages become theirs; the link is spent", async () => {
+    await request(app).post("/api/v1/bookings/claim").set("Origin", ORIGIN).send({ token }).expect(401);
+    await customer.get(`/api/v1/bookings/${number}`).expect(404);
+    const res = await customer.post("/api/v1/bookings/claim").set("Origin", ORIGIN).send({ token }).expect(200);
+    assert.equal(res.body.data.number, number);
+    await customer.get(`/api/v1/bookings/${number}`).expect(200);
+    const mine = (await customer.get("/api/v1/bookings").expect(200)).body.data.map((b) => b.number);
+    assert.ok(mine.includes(number));
+    const { rows } = await pool.query(
+      `SELECT u.email, b.claimed_at IS NOT NULL AS claimed, b.claim_token_hash IS NULL AS spent,
+              (SELECT count(*) FROM contracts c WHERE c.booking_id = b.id AND c.user_id <> b.user_id)::int AS stray_contracts,
+              EXISTS (SELECT 1 FROM notifications n WHERE n.entity_id = b.id AND n.user_id = b.user_id AND n.notification_type = 'BOOKING_LINKED') AS told
+         FROM bookings b JOIN users u ON u.id = b.user_id WHERE b.booking_number = $1`,
+      [number],
+    );
+    assert.deepEqual(rows[0], { email: "follow@example.com", claimed: true, spent: true, stray_contracts: 0, told: true });
+    await other.post("/api/v1/bookings/claim").set("Origin", ORIGIN).send({ token }).expect(410);
+    await other.get(`/api/v1/bookings/${number}`).expect(404);
+  });
+});

@@ -6,6 +6,7 @@ import { useAuthStore } from '@/stores/auth'
 import { money, toLocalInput } from '@/utils/format'
 import { useI18n } from '@/i18n'
 import Icon from '@/components/ui/Icon.vue'
+import LineClaimLink from '@/components/admin/LineClaimLink.vue'
 import AddressSearch from './AddressSearch.vue'
 import AvailabilityCalendar from './AvailabilityCalendar.vue'
 import IdentityDocuments from './IdentityDocuments.vue'
@@ -554,6 +555,8 @@ const HEADS = { 1: ['car', 'bk.head1'], 2: ['camera', 'bk.head2'], 3: ['check', 
             <div><dt>{{ t('bk.return') }}</dt><dd>{{ fmt(booking.returnAt) }} · {{ t('common.days', { n: booking.rentalDays }) }}</dd></div>
           </dl>
           <p v-if="holdLeft && !staff" class="hold"><Icon name="clock" :size="14" /> {{ t('bk.hold') }}</p>
+          <!-- staff: let the customer follow this booking (and pay, if asked to) in LINE -->
+          <LineClaimLink v-if="staff" :number="booking.number" />
         </div>
         <div v-else-if="busy" class="loading"><span class="spinner" /></div>
       </div>
