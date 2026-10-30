@@ -628,7 +628,9 @@ const HEADS = { 1: ['car', 'bk.head1'], 2: ['camera', 'bk.head2'], 3: ['check', 
   --accent: #e2362c;
   border: 0;
   padding: 0;
-  overflow: hidden; /* only the body scrolls: no second scrollbar on the dialog itself */
+  /* only the body scrolls. clip, not hidden: a hidden box can still be scrolled by the
+     browser (focusing a radio scrolled the whole popup up and hid the form) */
+  overflow: clip;
   width: min(760px, calc(100vw - 24px));
   max-height: calc(100dvh - 24px);
   background: transparent;
@@ -939,6 +941,7 @@ h3 i,
   gap: 10px;
 }
 .choice label {
+  position: relative; /* keeps its hidden radio inside it */
   display: flex;
   align-items: center;
   gap: 10px;
@@ -953,7 +956,10 @@ h3 i,
 }
 .choice input {
   position: absolute;
+  inset: 0;
+  margin: 0;
   opacity: 0;
+  pointer-events: none;
 }
 .choice span {
   display: grid;
@@ -1208,6 +1214,7 @@ h3 i,
   text-align: left;
 }
 .seg label {
+  position: relative;
   flex: 1;
   padding: 9px 12px;
   border: 1px solid #e3e4e8;
@@ -1223,6 +1230,8 @@ h3 i,
 }
 .seg input {
   position: absolute;
+  inset: 0;
+  margin: 0;
   opacity: 0;
   pointer-events: none;
 }
