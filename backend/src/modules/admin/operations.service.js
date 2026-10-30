@@ -47,7 +47,9 @@ const LIST_SELECT = `
              AND p.provider = 'counter' AND p.status = 'SUCCEEDED') AS paid_counter_minor,
          (SELECT COALESCE(sum(p.amount_minor), 0) FROM payments p WHERE p.booking_id = b.id AND p.purpose = 'DEPOSIT'
              AND p.status IN ('SUCCEEDED','PARTIALLY_REFUNDED','REFUNDED')) AS deposit_collected_minor,
-         (SELECT count(*) FROM bookings pb WHERE pb.user_id = b.user_id AND pb.status = 'COMPLETED' AND pb.id <> b.id)::int AS customer_trips
+         (SELECT count(*) FROM bookings pb WHERE pb.user_id = b.user_id AND pb.status = 'COMPLETED' AND pb.id <> b.id)::int AS customer_trips,
+         -- the booking's account can get LINE messages (signed in with LINE, or took a "follow in LINE" link)
+         EXISTS (SELECT 1 FROM user_identities i WHERE i.user_id = b.user_id AND i.provider = 'line') AS customer_on_line
     FROM bookings b
     JOIN vehicles v ON v.id = b.vehicle_id
     LEFT JOIN LATERAL (
@@ -75,6 +77,7 @@ export async function board(date) {
       customerEmail: r.contact_email ?? r.customer_email,
       ops: {
         customerTrips: r.customer_trips,
+        customerOnLine: r.customer_on_line, claimedAt: r.claimed_at,
         odometerStartKm: r.odometer_start_km, odometerEndKm: r.odometer_end_km,
         paidOnlineMinor: Number(r.paid_online_minor), paidCounterMinor: Number(r.paid_counter_minor),
         depositCollectedMinor: Number(r.deposit_collected_minor), depositReturnedAt: r.deposit_returned_at,

@@ -47,7 +47,9 @@ const data = ref(null)
 const busyId = ref(null)
 // booking whose "follow in LINE" link panel is open
 const lineFor = ref(null)
-const LINE_CLOSED = ['COMPLETED', 'CANCELLED', 'EXPIRED', 'REFUNDED']
+const LINE_CLOSED = ['CANCELLED', 'EXPIRED', 'REFUNDED']
+// a booking staff made whose customer cannot get LINE messages yet: show the link panel open
+const needsLineLink = (b) => b.bookedByStaff && !b.ops?.customerOnLine && !b.ops?.claimedAt && !LINE_CLOSED.includes(b.status)
 const error = ref('')
 let timer
 
@@ -157,6 +159,9 @@ const onlineBalance = (b) =>
             <small>{{ dt(b.createdAt) }}</small>
             <img v-if="b.vehicle.image" :src="b.vehicle.image.variants?.w640 ?? b.vehicle.image.url" alt="" loading="lazy" />
             <span class="pill" :class="pill(b)?.[1]">{{ pill(b)?.[0] ?? b.status }}</span>
+            <span v-if="b.bookedByStaff" class="badge staff" title="แอดมินกรอกการจองนี้แทนลูกค้า"><Icon name="user" :size="12" /> แอดมินจองให้</span>
+            <span v-if="b.ops?.customerOnLine" class="badge line" title="ลูกค้าได้รับแจ้งสถานะทาง LINE"><Icon name="check" :size="12" /> ลูกค้าติดตามใน LINE</span>
+            <span v-else-if="b.ops?.claimedAt" class="badge warn" title="ลูกค้าเปิดลิงก์นอกแอป LINE: การจองเป็นของลูกค้าแล้ว แต่แจ้งเตือนทาง LINE ไม่ได้">ลูกค้ารับการจองแล้ว (ไม่ใช่ LINE)</span>
           </div>
           <div class="c-car">
             <span class="fleet">{{ b.vehicle.fleetNo ?? '–' }}</span>
@@ -214,7 +219,7 @@ const onlineBalance = (b) =>
           >
             <Icon :name="ACTION[st][1]" :size="14" /> {{ ACTION[st][0] }}
           </button>
-          <button v-if="!LINE_CLOSED.includes(b.status)" type="button" class="ghost" :aria-expanded="lineFor === b.number" @click="lineFor = lineFor === b.number ? null : b.number">
+          <button v-if="!LINE_CLOSED.includes(b.status) && !needsLineLink(b)" type="button" class="ghost" :aria-expanded="lineFor === b.number" @click="lineFor = lineFor === b.number ? null : b.number">
             <Icon name="share" :size="14" /> ลิงก์ LINE
           </button>
           <span v-if="b.documents" class="docs">
@@ -231,7 +236,10 @@ const onlineBalance = (b) =>
             </a>
           </span>
         </div>
-        <div v-if="lineFor === b.number" class="line-link"><LineClaimLink :number="b.number" /></div>
+        <div v-if="needsLineLink(b) || lineFor === b.number" class="line-link">
+          <p v-if="needsLineLink(b)" class="line-why">แอดมินจองให้ · ลูกค้ายังไม่ได้ผูก LINE จึงยังไม่ได้รับแจ้งสถานะ ส่งลิงก์นี้ให้ลูกค้าในแชต LINE เพื่อมอบการจองให้ลูกค้า</p>
+          <LineClaimLink :number="b.number" />
+        </div>
       </li>
     </ul>
     <p v-else-if="data" class="none">ไม่มีรายการ</p>
@@ -413,6 +421,19 @@ const onlineBalance = (b) =>
 .badge.ok {
   border-color: rgb(95 211 154 / 0.5);
   color: #8fe5b8;
+}
+.badge.staff {
+  border-color: rgb(156 196 255 / 0.5);
+  color: #b9d6ff;
+}
+.badge.line {
+  border-color: rgb(6 199 85 / 0.6);
+  color: #7ee0a6;
+}
+.line-why {
+  margin: 0 0 8px;
+  color: #3a3d46;
+  font-size: 0.8rem;
 }
 .badge.warn {
   border-color: rgb(255 181 71 / 0.5);

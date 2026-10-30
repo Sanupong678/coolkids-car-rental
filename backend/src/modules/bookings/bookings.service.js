@@ -601,7 +601,8 @@ export async function getBooking(auth, number) {
 // so its status messages reach their LINE. Only the code's hash is stored.
 
 const CLAIM_DAYS = 7;
-const CLOSED = ["COMPLETED", "CANCELLED", "EXPIRED", "REFUNDED"];
+// a returned booking can still be taken (contract, receipts); a cancelled one cannot
+const CLOSED = ["CANCELLED", "EXPIRED", "REFUNDED"];
 export const claimUrl = (token) =>
   config.LIFF_ID ? `https://liff.line.me/${config.LIFF_ID}/claim/${token}` : `${config.FRONTEND_URL.replace(/\/$/, "")}/claim/${token}`;
 
