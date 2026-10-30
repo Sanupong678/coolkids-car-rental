@@ -238,7 +238,7 @@ const onlineBalance = (b) =>
         </div>
         <div v-if="needsLineLink(b) || lineFor === b.number" class="line-link">
           <p v-if="needsLineLink(b)" class="line-why">แอดมินจองให้ · ลูกค้ายังไม่ได้ผูก LINE จึงยังไม่ได้รับแจ้งสถานะ ส่งลิงก์นี้ให้ลูกค้าในแชต LINE เพื่อมอบการจองให้ลูกค้า</p>
-          <LineClaimLink :number="b.number" />
+          <LineClaimLink :number="b.number" :auto="lineFor === b.number" />
         </div>
       </li>
     </ul>
@@ -432,7 +432,7 @@ const onlineBalance = (b) =>
 }
 .line-why {
   margin: 0 0 8px;
-  color: #3a3d46;
+  color: var(--viz-muted);
   font-size: 0.8rem;
 }
 .badge.warn {
@@ -540,12 +540,13 @@ const onlineBalance = (b) =>
   gap: 4px;
   font-size: 0.8rem;
 }
-/* light panel under the row so the link and its copy button read clearly on the dark board */
+/* see-through panel under the row; its text follows the board's light text colour */
 .line-link {
   margin-top: 10px;
   padding: 12px 14px;
+  border: 1px solid var(--viz-border);
   border-radius: 14px;
-  background: #f7f8fa;
+  background: transparent;
 }
 .act {
   display: flex;
