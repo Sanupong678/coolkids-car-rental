@@ -897,23 +897,27 @@ h2 small {
   font-size: 0.72rem;
   color: #6b6e7a;
 }
+/* staff edit: a step heading is a button to that page, and looks like one */
 .steps .jump {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 4px 8px 4px 0;
-  border: 0;
+  padding: 3px 10px 3px 3px;
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
   border-radius: 999px;
-  background: transparent;
-  color: inherit;
+  background: color-mix(in srgb, var(--accent) 6%, #fff);
+  color: #121319;
   font: inherit;
+  font-weight: 600;
+  white-space: nowrap;
   cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
 }
 .steps .jump:hover,
 .steps .jump:focus-visible {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, #fff);
   color: var(--accent);
-  text-decoration: underline;
-  text-underline-offset: 3px;
 }
 .steps .on {
   color: #121319;
