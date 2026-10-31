@@ -189,11 +189,17 @@ const etaText = computed(() => {
 const fmt = (iso) => fmtDate(iso, { dateStyle: 'long', timeStyle: 'short' })
 const fmtTime = (iso) => fmtDate(iso, { hour: '2-digit', minute: '2-digit' })
 // Line items carry a type, so the label follows the language (discount = the promotion's own name).
-function itemLabel(it) {
-  if (it.type === 'RENTAL') return t('st.itemRental', { car: `${b.value.vehicle.brand} ${b.value.vehicle.model}`, n: it.quantity })
-  if (it.type === 'DELIVERY_FEE' && b.value.delivery?.distanceMeters) return t('st.itemDelivery', { km: (b.value.delivery.distanceMeters / 1000).toFixed(1) })
-  return it.description
-}
+const priceRows = computed(() => {
+  const br = b.value.money.breakdown
+  return [
+    [t('st.itemRental', { car: `${b.value.vehicle.brand} ${b.value.vehicle.model}`, n: b.value.rentalDays }), br.rentalMinor],
+    [b.value.delivery?.distanceMeters ? t('st.itemDelivery', { km: (b.value.delivery.distanceMeters / 1000).toFixed(1) }) : t('bk.deliveryFee'), br.deliveryMinor],
+    [t('bk.returnFee'), br.returnMinor],
+    [t('bk.sumPromo'), -br.promoDiscountMinor],
+    [t('bk.sumStaffDiscount'), -br.staffDiscountMinor],
+    ['VAT', br.taxMinor],
+  ].filter(([, amount], i) => i === 0 || amount)
+})
 
 async function openContract() {
   contract.value ??= await getContract(b.value.number)
@@ -325,7 +331,8 @@ async function copySummary() {
         <section class="card">
           <h2>{{ t('st.payment') }}</h2>
           <table>
-            <tr v-for="it in b.money.items" :key="it.description"><th>{{ itemLabel(it) }}</th><td>{{ money(it.amountMinor, b.money.currency) }}</td></tr>
+            <!-- what each line comes to (staff changes included), not the raw ledger rows -->
+            <tr v-for="[label, amount] in priceRows" :key="label"><th>{{ label }}</th><td>{{ money(amount, b.money.currency) }}</td></tr>
             <tr><th>{{ t('st.deposit') }}</th><td>{{ money(b.money.depositMinor, b.money.currency) }}</td></tr>
             <tr class="total"><th>{{ t(paid ? 'st.feePaid' : 'st.feeDue') }}</th><td>{{ money(paid ? b.payment.amountMinor : b.money.dueNowMinor, b.money.currency) }}</td></tr>
             <tr class="muted"><th>{{ t('st.atPickup') }}</th><td>{{ money(b.money.payAtPickupMinor, b.money.currency) }}</td></tr>

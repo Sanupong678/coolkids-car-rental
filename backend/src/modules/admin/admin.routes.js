@@ -20,7 +20,7 @@ import * as accounts from "./accounts.service.js";
 import * as staffEmail from "../notifications/staff-recipients.js";
 import * as documents from "../bookings/documents.service.js";
 import * as bookings from "../bookings/bookings.service.js";
-import { numberParam, offlineConfirmSchema, staffBookingSchema } from "../bookings/bookings.schemas.js";
+import { createBookingSchema, numberParam, offlineConfirmSchema, priceAdjustSchema, staffBookingSchema } from "../bookings/bookings.schemas.js";
 import { PAGE_KEYS } from "../rbac/pages.js";
 import * as vehicles from "./vehicles.service.js";
 
@@ -218,6 +218,31 @@ export function adminRoutes() {
     validate({ body: staffBookingSchema }),
     async (req, res) => {
       res.status(201).json({ data: await bookings.createStaffBooking(req.auth, req.valid.body, auditContext(req)) });
+    },
+  );
+  // ---- staff edit a booking: the form filled from it, details changed in place, prices set by hand
+  router.get(
+    "/bookings/:number/form",
+    requirePermission(P.BOOKINGS_WRITE, P.USERS_READ_SENSITIVE),
+    validate({ params: numberParam }),
+    async (req, res) => {
+      res.json({ data: await bookings.staffBookingForm(req.auth, req.valid.params.number, auditContext(req)) });
+    },
+  );
+  router.put(
+    "/bookings/:number",
+    requirePermission(P.BOOKINGS_WRITE, P.USERS_READ_SENSITIVE),
+    validate({ params: numberParam, body: createBookingSchema }),
+    async (req, res) => {
+      res.json({ data: await bookings.updateStaffBooking(req.auth, req.valid.params.number, req.valid.body, auditContext(req)) });
+    },
+  );
+  router.post(
+    "/bookings/:number/price",
+    requirePermission(P.BOOKINGS_WRITE),
+    validate({ params: numberParam, body: priceAdjustSchema }),
+    async (req, res) => {
+      res.json({ data: await bookings.adjustBookingPrice(req.auth, req.valid.params.number, req.valid.body, auditContext(req)) });
     },
   );
   router.post(

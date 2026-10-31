@@ -43,7 +43,7 @@ async function seedSettings(db) {
     "pricing.delivery_fee_minor": 3000,
     "pricing.extra_hour_grace_minutes": 59, // up to 59 min late is free
     "booking.hold_minutes": 15, // PENDING → EXPIRED if unpaid
-    "booking.min_lead_time_hours": 2,
+    "booking.min_lead_time_hours": 0,
     "booking.max_advance_days": 365,
     "booking.cancellation_policy": { free_until_hours_before: 48, late_cancel_fee_pct: 50 },
   };

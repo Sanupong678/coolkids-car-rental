@@ -1,7 +1,7 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { createBooking, getBooking, getBookingDefaults, submitForReview } from '@/api/bookings'
-import { confirmOffline, requestPayment, staffCreateBooking } from '@/api/admin'
+import { adjustPrice, bookingForm, confirmOffline, requestPayment, staffCreateBooking, updateBooking } from '@/api/admin'
 import { useAuthStore } from '@/stores/auth'
 import { money, toLocalInput } from '@/utils/format'
 import { useI18n } from '@/i18n'
@@ -14,19 +14,22 @@ import MapPicker from './MapPicker.vue'
 import TermsPopup from './TermsPopup.vue'
 
 // "จองเลย" wizard (also the LINE rich-menu flow):
-//   1 details → 2 photos (driver 1 required; driver 2 and a reference optional)
-//   → 3 sent: staff check everything, then the customer pays the reservation
+//   1 details → 2 price summary (staff may change any amount / give a discount)
+//   → 3 photos (driver 1 required; driver 2 and a reference optional)
+//   → 4 sent: staff check everything, then the customer pays the reservation
 //   fee from the booking page (QR + slip). No e-signature: the contract PDF is
 //   sent for acknowledgement and signed on paper at pick-up.
 // Step 1 creates a PENDING booking that holds the car; the server prices it and
 // fills the contract with exactly what the customer typed. `resumeNumber`
-// re-opens an unfinished booking at the right step.
+// re-opens an unfinished booking at the right step; `editNumber` (staff) opens a
+// booking's details to change them in place (same number, payments kept).
 const props = defineProps({
   vehicle: { type: Object, default: null },
   dates: { type: Object, default: null }, // { from: 'YYYY-MM-DD', to: 'YYYY-MM-DD' } from the calendar
   resumeNumber: { type: String, default: null },
   // back office: staff fill the form in for a customer, who pays outside the system or online
   staff: { type: Boolean, default: false },
+  editNumber: { type: String, default: null },
 })
 const emit = defineEmits(['close'])
 
@@ -44,7 +47,14 @@ const at10 = (iso, addDays = 0) => {
   const d = iso ? new Date(`${iso}T10:00:00`) : new Date()
   if (!iso) d.setHours(10, 0, 0, 0)
   d.setDate(d.getDate() + addDays)
-  return toLocalInput(d)
+  return toLocalInput(notPast(d))
+}
+// No notice needed (urgent bookings): a pick-up today whose 10:00 has gone moves to the next hour.
+function notPast(d) {
+  if (d > new Date()) return d
+  const next = new Date()
+  next.setHours(next.getHours() + 1, 0, 0, 0)
+  return next
 }
 const pickupAt = ref(props.dates ? at10(props.dates.from) : at10(null, 1))
 const returnAt = ref(props.dates ? at10(props.dates.to) : at10(null, 3))
@@ -80,7 +90,7 @@ watch(() => fulfillment.value, (f) => {
 // Days picked on the availability calendar keep the times already in the fields.
 const timeOf = (local, fallback = '10:00') => (local?.length >= 16 ? local.slice(11, 16) : fallback)
 function onDates({ from, to }) {
-  pickupAt.value = `${from}T${timeOf(pickupAt.value)}`
+  pickupAt.value = toLocalInput(notPast(new Date(`${from}T${timeOf(pickupAt.value)}`)))
   returnAt.value = `${to}T${timeOf(returnAt.value)}`
 }
 
@@ -184,7 +194,28 @@ async function submitDetails() {
   busy.value = true
   error.value = ''
   try {
-    const body = {
+    const body = detailsBody()
+    // Back from a later step: nothing changed → carry on with the same booking.
+    const sent = JSON.stringify(body)
+    if (booking.value && sent === sentBody.value) return void (await afterDetails())
+    if (props.editNumber) {
+      booking.value = await updateBooking(props.editNumber, body)
+    } else {
+      // changed → a new booking replaces the unfinished one (photos carry over)
+      const replaces = booking.value && ['DRAFT', 'CHANGES_REQUESTED'].includes(booking.value.review?.status) ? booking.value.number : undefined
+      booking.value = props.staff ? await staffCreateBooking({ ...body, replaces }) : await createBooking({ ...body, replaces })
+    }
+    sentBody.value = sent
+    await afterDetails()
+  } catch (err) {
+    error.value = explain(err)
+  } finally {
+    busy.value = false
+  }
+}
+
+function detailsBody() {
+  return {
       vehicleSlug: v.value.slug,
       pickupAt: new Date(pickupAt.value).toISOString(),
       returnAt: new Date(returnAt.value).toISOString(),
@@ -205,20 +236,7 @@ async function submitDetails() {
       contactEmail: use.value.contactEmail.trim() || undefined,
       customer: { ...c.value, fullName: c.value.fullName.trim(), phone: c.value.phone.trim(), idNumber: c.value.idNumber.trim(), licenseNumber: c.value.licenseNumber.trim() },
       declarations: { hasOriginalLicense: true, infoMatchesLicense: true },
-      ...(props.staff ? { customerEmail: customerEmail.value.trim() || undefined } : {}),
-    }
-    // Back from the documents step: nothing changed → carry on with the same booking;
-    // changed → a new booking replaces the unfinished one (photos carry over).
-    const sent = JSON.stringify(body)
-    if (booking.value && sent === sentBody.value) return void (await afterDetails())
-    const replaces = booking.value && ['DRAFT', 'CHANGES_REQUESTED'].includes(booking.value.review?.status) ? booking.value.number : undefined
-    booking.value = props.staff ? await staffCreateBooking({ ...body, replaces }) : await createBooking({ ...body, replaces })
-    sentBody.value = sent
-    await afterDetails()
-  } catch (err) {
-    error.value = explain(err)
-  } finally {
-    busy.value = false
+      ...(props.staff && !props.editNumber ? { customerEmail: customerEmail.value.trim() || undefined } : {}),
   }
 }
 
@@ -241,17 +259,55 @@ const onDocs = (documents) => (booking.value = { ...booking.value, documents })
 // What step 1 last sent; set only when the details were typed in this form, so
 // "แก้ไขรายละเอียด" (back to step 1) shows them again. A resumed booking has none.
 const sentBody = ref(null)
-async function backToDetails() {
+const backToDetails = () => goStep(1)
+// After the details: the price summary (a booking already sent goes to "sent").
+async function afterDetails() {
+  const review = booking.value.review?.status
+  await goStep(!props.editNumber && (review === 'SUBMITTED' || review === 'APPROVED') ? 4 : 2)
+}
+async function goStep(n) {
   error.value = ''
-  step.value = 1
+  step.value = n
   await nextTick()
   scroller.value?.scrollTo({ top: 0 })
 }
-async function afterDetails() {
-  const review = booking.value.review?.status
-  step.value = review === 'SUBMITTED' || review === 'APPROVED' ? 3 : 2
-  await nextTick()
-  scroller.value?.scrollTo({ top: 0 })
+// Edit mode: a booking past its documents step is done once the summary is checked.
+const editDone = computed(() => props.editNumber && !(booking.value?.status === 'PENDING' && ['DRAFT', 'CHANGES_REQUESTED'].includes(booking.value?.review?.status)))
+
+// ---------------------------------------------------------------- step 2: price summary
+// Staff may set any amount by hand (rent, trip fees, deposit) and give a discount.
+const br = computed(() => booking.value?.money.breakdown ?? {})
+const priceForm = ref(null) // baht, as typed
+function resetPriceForm() {
+  const b = br.value
+  priceForm.value = {
+    rental: (b.rentalMinor ?? 0) / 100, delivery: (b.deliveryMinor ?? 0) / 100, returnFee: (b.returnMinor ?? 0) / 100,
+    deposit: (booking.value?.money.depositMinor ?? 0) / 100, discount: (b.staffDiscountMinor ?? 0) / 100,
+  }
+}
+watch(() => booking.value?.money, () => props.staff && booking.value && resetPriceForm())
+const toMinor = (baht) => Math.max(0, Math.round(Number(baht || 0) * 100))
+const priceChanged = computed(() => {
+  const f = priceForm.value
+  const b = br.value
+  return Boolean(f && booking.value) && (toMinor(f.rental) !== b.rentalMinor || toMinor(f.delivery) !== b.deliveryMinor
+    || toMinor(f.returnFee) !== b.returnMinor || toMinor(f.deposit) !== booking.value.money.depositMinor || toMinor(f.discount) !== b.staffDiscountMinor)
+})
+async function savePrice() {
+  if (busy.value || !priceChanged.value) return
+  busy.value = true
+  error.value = ''
+  try {
+    const f = priceForm.value
+    booking.value = await adjustPrice(booking.value.number, {
+      rentalMinor: toMinor(f.rental), deliveryMinor: toMinor(f.delivery), returnMinor: toMinor(f.returnFee),
+      depositMinor: toMinor(f.deposit), discountMinor: toMinor(f.discount),
+    })
+  } catch (err) {
+    error.value = explain(err)
+  } finally {
+    busy.value = false
+  }
 }
 
 async function submit() {
@@ -260,7 +316,7 @@ async function submit() {
   error.value = ''
   try {
     booking.value = await submitForReview(booking.value.number)
-    step.value = 3
+    step.value = 4
     scroller.value?.scrollTo({ top: 0 })
   } catch (err) {
     error.value = explain(err)
@@ -288,7 +344,7 @@ async function confirmStaff() {
           method: paidMethod.value,
           note: paidNote.value.trim() || undefined,
         })
-    step.value = 3
+    step.value = 4
     scroller.value?.scrollTo({ top: 0 })
   } catch (err) {
     error.value = explain(err)
@@ -318,6 +374,7 @@ onMounted(async () => {
   // A new booking starts with the rental terms: read to the end and accept before the form.
   if (props.staff) termsLocale.value = 'th'
   else if (!props.resumeNumber) showTerms.value = true
+  if (props.editNumber) return loadForEdit()
   holdTimer = setInterval(tickHold, 1000)
   if (props.resumeNumber) {
     busy.value = true
@@ -333,6 +390,37 @@ onMounted(async () => {
     loadSaved()
   }
 })
+
+// Staff edit: the form shows the booking as it is; "ดำเนินการต่อ" saves the changes.
+async function loadForEdit() {
+  busy.value = true
+  try {
+    const [f, b] = await Promise.all([bookingForm(props.editNumber), getBooking(props.editNumber)])
+    booking.value = b
+    pickupAt.value = toLocalInput(new Date(f.pickupAt))
+    returnAt.value = toLocalInput(new Date(f.returnAt))
+    fulfillment.value = f.fulfillment
+    if (f.delivery) {
+      quote.value = { ...f.delivery, feeMinor: b.money.breakdown.deliveryMinor }
+      deliveryNotes.value = f.delivery.notes ?? ''
+    }
+    returnType.value = f.returnType
+    if (f.returnType === 'ADDRESS' && f.returnAddress) returnQuote.value = { ...f.returnAddress, feeMinor: b.money.breakdown.returnMinor }
+    notes.value = f.notes ?? ''
+    c.value = { ...c.value, ...f.customer }
+    use.value = {
+      areaOfUse: f.areaOfUse ?? '', stayLocation: f.stayLocation ?? '', socialUrl: f.socialUrl ?? '',
+      rentalPurpose: f.rentalPurpose ?? 'TRAVEL', contactEmail: f.contactEmail ?? '',
+    }
+    decl.value = { hasOriginalLicense: true, infoMatchesLicense: true }
+    await nextTick()
+    sentBody.value = JSON.stringify(detailsBody())
+  } catch (err) {
+    error.value = explain(err)
+  } finally {
+    busy.value = false
+  }
+}
 
 // A returning customer is always asked first: book with the details saved from
 // their last booking, or type new ones. Nothing is filled in until they choose, and
@@ -372,7 +460,7 @@ function close() {
 }
 
 const STEPS = computed(() => t('bk.steps'))
-const HEADS = { 1: ['car', 'bk.head1'], 2: ['camera', 'bk.head2'], 3: ['check', 'bk.head3'] }
+const HEADS = { 1: ['car', props.editNumber ? 'bk.headEdit' : 'bk.head1'], 2: ['receipt', 'bk.headSummary'], 3: ['camera', 'bk.head2'], 4: ['check', 'bk.head3'] }
 </script>
 
 <template>
@@ -547,17 +635,54 @@ const HEADS = { 1: ['car', 'bk.head1'], 2: ['camera', 'bk.head2'], 3: ['check', 
         </form>
 
         <!-- 2. identity documents -->
-        <div v-else-if="step === 2 && booking?.documents" class="docs-step">
+        <!-- 2. price summary -->
+        <div v-else-if="step === 2 && booking" class="summary">
+          <button v-if="(sentBody && v) || editNumber" type="button" class="back" @click="backToDetails">← {{ t('bk.editDetails') }}</button>
+          <p class="lead">{{ booking.number }} · {{ booking.vehicle.brand }} {{ booking.vehicle.model }} · {{ fmt(booking.pickupAt) }} – {{ fmt(booking.returnAt) }}</p>
+          <table class="bill">
+            <tbody>
+              <tr><th>{{ t('bk.sumRent', { n: booking.rentalDays }) }}</th><td>{{ money(br.rentalMinor, booking.money.currency) }}</td></tr>
+              <tr v-if="br.deliveryMinor"><th>{{ t('bk.deliveryFee') }}</th><td>{{ money(br.deliveryMinor, booking.money.currency) }}</td></tr>
+              <tr v-if="br.returnMinor"><th>{{ t('bk.returnFee') }}</th><td>{{ money(br.returnMinor, booking.money.currency) }}</td></tr>
+              <tr v-if="br.promoDiscountMinor" class="minus"><th>{{ t('bk.sumPromo') }}</th><td>−{{ money(br.promoDiscountMinor, booking.money.currency) }}</td></tr>
+              <tr v-if="br.staffDiscountMinor" class="minus"><th>{{ t('bk.sumStaffDiscount') }}</th><td>−{{ money(br.staffDiscountMinor, booking.money.currency) }}</td></tr>
+              <tr v-if="br.taxMinor"><th>VAT</th><td>{{ money(br.taxMinor, booking.money.currency) }}</td></tr>
+              <tr class="sub"><th>{{ t('bk.sumRentTotal') }}</th><td>{{ money(booking.money.totalMinor, booking.money.currency) }}</td></tr>
+              <tr><th>{{ t('bk.sumDeposit') }}</th><td>{{ money(booking.money.depositMinor, booking.money.currency) }}</td></tr>
+              <tr class="grand"><th>{{ t('bk.sumGrand') }}</th><td>{{ money(booking.money.totalMinor + booking.money.depositMinor, booking.money.currency) }}</td></tr>
+              <tr v-if="booking.status === 'PENDING'" class="now"><th>{{ t('bk.sumNow') }}</th><td>{{ money(booking.money.dueNowMinor, booking.money.currency) }}</td></tr>
+            </tbody>
+          </table>
+          <small class="hint">{{ t('bk.sumDepositHint') }}</small>
+          <section v-if="staff && priceForm" class="adjust">
+            <h3>{{ t('bk.adjTitle') }}</h3>
+            <div class="adj-grid">
+              <label class="f"><span>{{ t('bk.adjRent') }}</span><input v-model="priceForm.rental" type="number" min="0" step="any" inputmode="decimal" /></label>
+              <label class="f"><span>{{ t('bk.deliveryFee') }}</span><input v-model="priceForm.delivery" type="number" min="0" step="any" inputmode="decimal" /></label>
+              <label class="f"><span>{{ t('bk.returnFee') }}</span><input v-model="priceForm.returnFee" type="number" min="0" step="any" inputmode="decimal" /></label>
+              <label class="f"><span>{{ t('bk.sumDeposit') }}</span><input v-model="priceForm.deposit" type="number" min="0" step="any" inputmode="decimal" /></label>
+              <label class="f disc"><span>{{ t('bk.adjDiscount') }}</span><input v-model="priceForm.discount" type="number" min="0" step="any" inputmode="decimal" /></label>
+            </div>
+            <small class="hint">{{ t('bk.adjHint') }}</small>
+            <div class="adj-acts">
+              <button type="button" class="ghost-btn" :disabled="busy || !priceChanged" @click="resetPriceForm">{{ t('bk.adjReset') }}</button>
+              <button type="button" class="save-btn" :disabled="busy || !priceChanged" @click="savePrice">{{ t('bk.adjSave') }}</button>
+            </div>
+          </section>
+        </div>
+
+        <!-- 3. identity documents -->
+        <div v-else-if="step === 3 && booking?.documents" class="docs-step">
           <p v-if="booking.review?.status === 'CHANGES_REQUESTED'" class="changes" role="alert">
             <Icon name="receipt" :size="15" /> {{ t('bk.changes', { note: booking.review.note }) }}
           </p>
           <p class="lead">{{ t('bk.docsLead', { number: booking.number }) }}</p>
-          <button v-if="sentBody && v" type="button" class="back" @click="backToDetails">← {{ t('bk.editDetails') }}</button>
+          <button type="button" class="back" @click="goStep(2)">← {{ t('bk.sumBack') }}</button>
           <IdentityDocuments :number="booking.number" :documents="booking.documents" @updated="onDocs" />
         </div>
 
         <!-- 3. sent for review -->
-        <div v-else-if="step === 3 && booking" class="sent">
+        <div v-else-if="step === 4 && booking" class="sent">
           <span class="badge"><Icon name="check" :size="26" /></span>
           <h3>{{ !staff ? t('bk.sentTitle') : staffMode === 'online' ? t('bk.staffApprovedTitle') : t('bk.staffConfirmedTitle') }}</h3>
           <p v-if="staff && staffMode === 'online'">{{ t('bk.staffApprovedBody', { fee: money(booking.money.dueNowMinor, booking.money.currency) }) }}</p>
@@ -594,7 +719,13 @@ const HEADS = { 1: ['car', 'bk.head1'], 2: ['camera', 'bk.head2'], 3: ['check', 
             <span v-if="!busy">{{ t('bk.continue') }}</span><span v-else class="spinner" />
           </button>
         </template>
-        <template v-else-if="step === 2 && booking?.documents && staff">
+        <template v-else-if="step === 2 && booking">
+          <button v-if="editDone" type="button" class="primary wide" :disabled="busy" @click="close">{{ t('bk.editDone') }}</button>
+          <button v-else type="button" class="primary wide" :disabled="busy || priceChanged" @click="goStep(3)">
+            {{ priceChanged ? t('bk.adjSaveFirst') : t('bk.continue') }}
+          </button>
+        </template>
+        <template v-else-if="step === 3 && booking?.documents && staff">
           <div class="staff-pay">
             <strong class="how">{{ t('bk.staffHow') }}</strong>
             <div class="seg modes" role="radiogroup" :aria-label="t('bk.staffHow')">
@@ -616,13 +747,13 @@ const HEADS = { 1: ['car', 'bk.head1'], 2: ['camera', 'bk.head2'], 3: ['check', 
             <template v-else>{{ !booking.documents.complete ? t('bk.needDocs') : staffMode === 'online' ? t('bk.staffApprove') : t('bk.staffConfirm') }}</template>
           </button>
         </template>
-        <template v-else-if="step === 2 && booking?.documents">
+        <template v-else-if="step === 3 && booking?.documents">
           <button type="button" class="primary wide" :disabled="!booking.documents.complete || busy" @click="submit">
             <span v-if="busy" class="spinner" />
             <template v-else>{{ t(booking.documents.complete ? 'bk.send' : 'bk.needDocs') }}</template>
           </button>
         </template>
-        <template v-else-if="step === 3">
+        <template v-else-if="step === 4">
           <button type="button" class="primary wide" @click="close">{{ t('bk.viewStatus') }}</button>
         </template>
       </footer>
@@ -1059,6 +1190,111 @@ h3 i,
 .docs-step {
   display: grid;
   gap: 12px;
+}
+.summary {
+  display: grid;
+  gap: 12px;
+}
+.summary .lead {
+  font-size: 0.9rem;
+  color: var(--text-muted, #5b6170);
+}
+.summary .back {
+  justify-self: start;
+  min-height: 36px;
+  padding: 0 14px;
+  border: 1px solid var(--border, #d9dce3);
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.bill {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.95rem;
+}
+.bill th,
+.bill td {
+  padding: 9px 2px;
+  border-bottom: 1px solid var(--border, #e6e8ee);
+  font-weight: 500;
+  text-align: left;
+}
+.bill td {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.bill .minus td {
+  color: #1f8a4c;
+}
+.bill .sub th,
+.bill .sub td {
+  font-weight: 700;
+}
+.bill .grand th,
+.bill .grand td {
+  border-bottom: 0;
+  font-size: 1.1rem;
+  font-weight: 800;
+}
+.bill .now th,
+.bill .now td {
+  border-bottom: 0;
+  color: var(--brand, #e2362c);
+  font-weight: 700;
+}
+.adjust {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border: 1px dashed var(--brand, #e2362c);
+  border-radius: 14px;
+}
+.adjust h3 {
+  font-size: 0.95rem;
+  font-weight: 700;
+}
+.adj-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
+}
+.adj-grid .disc input {
+  border-color: #1f8a4c;
+}
+.adj-acts {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.ghost-btn,
+.save-btn {
+  min-height: 40px;
+  padding: 0 18px;
+  border-radius: 999px;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+.ghost-btn {
+  border: 1px solid var(--border, #d9dce3);
+  background: transparent;
+  color: inherit;
+}
+.save-btn {
+  border: 0;
+  background: #1f8a4c;
+  color: #fff;
+}
+.ghost-btn:disabled,
+.save-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 .docs-step .back {
   justify-self: start;

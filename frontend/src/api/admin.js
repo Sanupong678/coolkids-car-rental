@@ -85,3 +85,7 @@ export const confirmOffline = (number, body) => postJson(`/admin/bookings/${numb
 // one-time "follow in LINE" link for a booking staff made → { url, expiresAt }
 export const claimLink = (number) => postJson(`/admin/bookings/${number}/claim-link`, {})
 export const requestPayment = (number, body = {}) => postJson(`/admin/bookings/${number}/request-payment`, body)
+// staff edit a booking: the form filled from it, details saved in place, prices set by hand (satang)
+export const bookingForm = (number) => api(`/admin/bookings/${number}/form`).then((r) => r.data)
+export const updateBooking = (number, body) => api(`/admin/bookings/${number}`, { method: 'PUT', body }).then((r) => r.data)
+export const adjustPrice = (number, body) => postJson(`/admin/bookings/${number}/price`, body)

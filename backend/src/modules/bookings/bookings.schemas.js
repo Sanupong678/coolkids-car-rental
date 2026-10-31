@@ -71,6 +71,13 @@ export const createBookingSchema = bookingRules(bookingFields);
 export const staffBookingSchema = bookingRules(bookingFields.extend({ customerEmail: z.email().max(254).optional() }));
 
 // Staff confirm a booking paid outside the system (cash / transfer): no online payment step.
+// Staff set a booking's prices by hand (satang); a missing field keeps its amount.
+const amount = z.number().int().min(0).max(100_000_000).optional();
+export const priceAdjustSchema = z.object({
+  rentalMinor: amount, deliveryMinor: amount, returnMinor: amount, depositMinor: amount,
+  discountMinor: amount, // "ส่วนลดจากแอดมิน", on top of any promotion
+});
+
 export const offlineConfirmSchema = z.object({
   paidMinor: z.number().int().min(0).max(100_000_000),
   method: z.enum(["cash", "transfer"]),

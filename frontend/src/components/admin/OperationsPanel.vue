@@ -10,6 +10,7 @@ import MileageDialog from '@/components/admin/ops/MileageDialog.vue'
 import PaymentDialog from '@/components/admin/ops/PaymentDialog.vue'
 import LineClaimLink from '@/components/admin/LineClaimLink.vue'
 import BookingModal from '@/components/booking/BookingModal.vue'
+import { getVehicle } from '@/api/catalogue'
 import { documentUrl } from '@/api/bookings'
 
 // Dispatch board. Staff press the buttons; the customer's tracker updates:
@@ -57,7 +58,21 @@ const unfinished = (b) => b.bookedByStaff && b.status === 'PENDING' && ['DRAFT',
 const editing = ref(null) // booking number open in the staff booking form
 function onEditClose() {
   editing.value = null
+  changing.value = null
   load()
+}
+// "แก้ไขรายละเอียด": staff change any booking until the car is back (dates, places, renter, prices)
+const EDITABLE = ['PENDING', 'CONFIRMED', 'PREPARING', 'READY', 'IN_DELIVERY', 'ACTIVE']
+const changing = ref(null) // { number, vehicle }
+async function openEdit(b) {
+  busyId.value = b.id
+  try {
+    changing.value = { number: b.number, vehicle: await getVehicle(b.vehicle.slug) }
+  } catch (err) {
+    error.value = err.message
+  } finally {
+    busyId.value = null
+  }
 }
 const needsLineLink = (b) => !unfinished(b) && b.bookedByStaff && !b.ops?.customerOnLine && !b.ops?.claimedAt && !LINE_CLOSED.includes(b.status)
 const error = ref('')
@@ -219,6 +234,9 @@ const onlineBalance = (b) =>
           <button v-if="unfinished(b)" type="button" class="go" @click="editing = b.number">
             <Icon name="receipt" :size="14" /> กรอกต่อ / แก้ไข
           </button>
+          <button v-if="EDITABLE.includes(b.status) && !unfinished(b)" type="button" class="ghost" :disabled="busyId === b.id" @click="openEdit(b)">
+            <Icon name="receipt" :size="14" /> แก้ไขรายละเอียด
+          </button>
           <RouterLink v-if="awaitsReview(b)" :to="{ query: { tab: 'approvals', booking: b.number } }" class="go review">
             <Icon name="user" :size="14" /> ตรวจเอกสาร
           </RouterLink>
@@ -261,6 +279,7 @@ const onlineBalance = (b) =>
     <MileageDialog v-if="tool?.kind === 'mileage'" :booking="tool.booking" @close="onToolClose" />
     <DocumentsDialog v-if="tool?.kind === 'contract'" :booking="tool.booking" @close="onToolClose" />
     <BookingModal v-if="editing" :resume-number="editing" staff @close="onEditClose" />
+    <BookingModal v-if="changing" :vehicle="changing.vehicle" :edit-number="changing.number" staff @close="onEditClose" />
     <div v-else-if="!error" class="skeleton" style="height: 240px" />
   </div>
 </template>

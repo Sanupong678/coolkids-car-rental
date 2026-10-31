@@ -66,18 +66,44 @@ export function buildSnapshot({ company, contractNumber, issuedAt, customer, veh
       returnPlace: returnPlace?.address ? `${returnPlace.address} (รับรถคืนถึงที่ / Collected)` : `${vehicle.location_name}`,
       executedAt: `${vehicle.location_name} (ทำสัญญาออนไลน์ / signed online)`,
     },
-    money: {
-      rental: baht(money.rental),
-      deposit: baht(money.deposit),
-      // the contract's one box covers both trips: delivering the car and collecting it
-      delivery: baht(money.delivery + (money.returnPickup ?? 0)),
-      discount: money.discount ? `−${baht(money.discount)}` : "—",
-      paidOnline: baht(money.dueNow ?? money.total),
-      totalPayable: baht(money.total + money.deposit),
-    },
+    money: snapshotMoney(money),
     declarations: { hasOriginalLicense: "ใช่ / Yes", infoMatchesLicense: "ใช่ / Yes" },
     signature: { dataUrl: null, signedAt: null },
   };
+}
+
+/** The contract's money boxes. `discount` covers promotions and staff discounts alike. */
+export const snapshotMoney = (money) => ({
+  rental: baht(money.rental),
+  deposit: baht(money.deposit),
+  // the contract's one box covers both trips: delivering the car and collecting it
+  delivery: baht(money.delivery + (money.returnPickup ?? 0)),
+  discount: money.discount ? `−${baht(money.discount)}` : "—",
+  paidOnline: baht(money.dueNow ?? money.total),
+  totalPayable: baht(money.total + money.deposit),
+});
+
+/**
+ * Staff changed a booking's details or price: the live contract is superseded by a new one
+ * (new number, unsigned: a signed one has to be signed again). `makeSnapshot(old)` gives the
+ * new merge data from the old snapshot.
+ */
+export async function reissueContract(db, { bookingId, userId }, makeSnapshot) {
+  const { rows } = await db.query(
+    "SELECT id, data_snapshot FROM contracts WHERE booking_id = $1 AND status IN ('ISSUED','SIGNED') FOR UPDATE",
+    [bookingId],
+  );
+  const old = rows[0];
+  const contractNumber = await nextContractNumber(db);
+  const snapshot = {
+    ...makeSnapshot(old?.data_snapshot ?? null),
+    contract: { number: contractNumber, issuedDate: fmtDate(new Date()) },
+    signature: { dataUrl: null, signedAt: null },
+  };
+  if (old) await db.query("UPDATE contracts SET status = 'SUPERSEDED' WHERE id = $1", [old.id]);
+  const made = await issueContract(db, { bookingId, userId, contractNumber, snapshot });
+  if (old) await db.query("UPDATE contracts SET supersedes_contract_id = $2 WHERE id = $1", [made.id, old.id]);
+  return made;
 }
 
 /** Reserves the contract number up front: it is printed inside the snapshot. */

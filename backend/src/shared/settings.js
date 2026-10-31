@@ -8,7 +8,7 @@ export const SETTING_DEFAULTS = {
   "pricing.tax_inclusive": true, // advertised prices include VAT
   "pricing.extra_hour_grace_minutes": 59,
   "booking.hold_minutes": 30,
-  "booking.min_lead_time_hours": 2,
+  "booking.min_lead_time_hours": 0,
   "booking.max_advance_days": 365,
   "booking.min_driver_age": 20,
   // "โอน = จอง": paid once staff approve the documents; the rest is paid at pick-up.

@@ -399,7 +399,7 @@ async function seedBookingPolicy(db) {
   const settings = {
     "pricing.tax_inclusive": true,
     "booking.hold_minutes": 30,
-    "booking.min_lead_time_hours": 2,
+    "booking.min_lead_time_hours": 0,
     "booking.min_driver_age": 20,
     "booking.reservation_fee_minor": thb(1000),
     "booking.review_hold_hours": 24,

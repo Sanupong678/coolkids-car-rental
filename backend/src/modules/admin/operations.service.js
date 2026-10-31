@@ -43,7 +43,7 @@ const LIST_SELECT = `
          (SELECT json_build_object('status', p.status, 'succeededAt', p.succeeded_at, 'methodType', p.payment_method_type)
             FROM payments p WHERE p.booking_id = b.id AND p.is_balance ORDER BY (p.status = 'SUCCEEDED') DESC, p.created_at DESC LIMIT 1) AS balance_payment,
          NULL AS timeline,
-         (SELECT json_agg(json_build_object('type', i.item_type, 'description', i.description, 'quantity', i.quantity,
+         (SELECT json_agg(json_build_object('type', i.item_type, 'adjusts', i.adjusts, 'description', i.description, 'quantity', i.quantity,
                                             'amountMinor', i.amount_minor) ORDER BY i.sort_order)
             FROM booking_items i WHERE i.booking_id = b.id) AS items,
          -- money for the board: paid online / at the counter, deposit held

@@ -1,14 +1,16 @@
 import { randomUUID } from "node:crypto";
 import { config } from "../../config/env.js";
 import { pool, withTransaction } from "../../db/pool.js";
-import { encryptPII, hmac, last4, randomToken, sha256 } from "../../shared/crypto.js";
+import { decryptPII, encryptPII, hmac, last4, randomToken, sha256 } from "../../shared/crypto.js";
 import { AppError, BadRequest, Conflict, Forbidden, NotFound } from "../../shared/errors.js";
 import { distanceMeters, minutesToDrive } from "../../shared/geo.js";
 import { getSettings, vehicleFeePolicy } from "../../shared/settings.js";
 import * as storage from "../../shared/storage.js";
 import { recordAudit } from "../audit/audit.service.js";
 import { findVehicleForBooking } from "../catalogue/catalogue.repository.js";
-import { buildSnapshot, issueContract, nextContractNumber, renderContract, signContract } from "../contracts/contracts.service.js";
+import {
+  buildSnapshot, issueContract, nextContractNumber, reissueContract, renderContract, signContract, snapshotMoney,
+} from "../contracts/contracts.service.js";
 import { renderPdf } from "../contracts/pdf.js";
 import * as maps from "../maps/maps.service.js";
 import { queueEmail } from "../notifications/email.service.js";
@@ -131,32 +133,127 @@ export async function deliveryQuote(input, vehicleSlug) {
 
 // ---------------------------------------------------------------- create
 
+/** Checks on the period and licence that need no database (customer form, staff form, staff edit). */
+function checkPeriod(input, settings, now, staff) {
+  const pickupAt = new Date(input.pickupAt);
+  const returnAt = new Date(input.returnAt);
+  // No notice needed (urgent walk-in / phone bookings): the form's hour slots may sit a
+  // little in the past, and staff may key in a hand-over that already started today.
+  const lead = Number(settings["booking.min_lead_time_hours"]);
+  const earliest = staff ? now.getTime() - DAY : lead > 0 ? now.getTime() + lead * HOUR : now.getTime() - HOUR;
+  if (pickupAt < new Date(earliest)) {
+    throw BadRequest("Pick-up time is too soon", { pickupAt: [lead > 0 && !staff ? `ต้องจองล่วงหน้าอย่างน้อย ${lead} ชั่วโมง` : "เวลารับรถผ่านไปแล้ว"] });
+  }
+  if (pickupAt > new Date(now.getTime() + settings["booking.max_advance_days"] * DAY)) {
+    throw BadRequest("Pick-up date is too far ahead", { pickupAt: ["จองล่วงหน้าได้ไม่เกิน 1 ปี"] });
+  }
+  if (returnAt <= pickupAt) throw BadRequest("Return must be after pick-up", { returnAt: ["วันคืนรถต้องหลังวันรับรถ"] });
+  if (new Date(input.customer.licenseExpiry) < returnAt) {
+    throw BadRequest("Driving licence expires before the rental ends", { "customer.licenseExpiry": ["ใบขับขี่หมดอายุก่อนวันคืนรถ"] });
+  }
+  return { pickupAt, returnAt };
+}
+
+/** Delivery and collection quotes (network calls: made before any transaction). */
+async function placeQuotes(input, vehicleSlug) {
+  const delivery = input.fulfillment === "DELIVERY" ? await deliveryQuote(input.delivery, vehicleSlug) : null;
+  // Collecting the car somewhere else costs the same per km as delivering it there.
+  const returnType = input.returnType ?? "BRANCH";
+  const collect = returnType === "ADDRESS" ? await deliveryQuote(input.returnAddress, vehicleSlug) : returnType === "SAME_AS_DELIVERY" ? delivery : null;
+  const deliveryAddress = delivery
+    ? { address: delivery.address ?? input.delivery.address, placeId: delivery.placeId, lat: delivery.lat, lng: delivery.lng,
+        notes: input.delivery.notes ?? null, source: delivery.source }
+    : null;
+  const returnAddress = returnType === "SAME_AS_DELIVERY"
+    ? deliveryAddress
+    : collect
+      ? { address: collect.address ?? input.returnAddress.address, placeId: collect.placeId, lat: collect.lat, lng: collect.lng,
+          notes: input.returnAddress.notes ?? null, source: collect.source }
+      : null;
+  return { delivery, collect, returnType, deliveryAddress, returnAddress };
+}
+
+/** Driver age and rental length for this car, then the price. */
+function priceFor(v, c, settings, pickupAt, returnAt, places) {
+  const minAge = Math.max(v.min_driver_age, Number(settings["booking.min_driver_age"]));
+  if (ageOn(c.dateOfBirth, pickupAt) < minAge) {
+    throw BadRequest(`Driver must be at least ${minAge}`, { "customer.dateOfBirth": [`ผู้ขับขี่ต้องมีอายุ ${minAge} ปีขึ้นไป`] });
+  }
+  const days = rentalDaysBetween(pickupAt, returnAt, settings["pricing.extra_hour_grace_minutes"]);
+  if (days < v.min_rental_days) throw BadRequest(`Minimum rental is ${v.min_rental_days} days`, { returnAt: [`เช่าขั้นต่ำ ${v.min_rental_days} วัน`] });
+  if (v.max_rental_days && days > v.max_rental_days) throw BadRequest(`Maximum rental is ${v.max_rental_days} days`);
+  const money = priceBooking(v, days, places.delivery?.feeMinor ?? 0, settings, places.collect?.feeMinor ?? 0);
+  // "โอน = จอง": only the reservation fee is paid online, after staff approve the documents.
+  money.dueNow = Math.min(Number(settings["booking.reservation_fee_minor"]), money.total);
+  return { days, money };
+}
+
+/**
+ * A new identity version (versioned and encrypted; the booking points at this exact one).
+ * Same ID and licence numbers as the current one (or `carryFrom`) → the photos already sent carry over.
+ */
+async function writeIdentity(db, userId, c, carryFrom = null) {
+  const { rows: prev } = await db.query(
+    `SELECT id_front_media_id, id_back_media_id, license_front_media_id FROM customer_identities
+      WHERE user_id = $1 AND ${carryFrom ? "id = $5" : "is_current"} AND deleted_at IS NULL AND id_document_type = $2
+        AND id_document_number_hmac = $3 AND license_number_hmac = $4`,
+    [userId, c.idType, hmac(c.idNumber), hmac(c.licenseNumber), ...(carryFrom ? [carryFrom] : [])],
+  );
+  await db.query("UPDATE customer_identities SET is_current = false WHERE user_id = $1 AND is_current", [userId]);
+  const { rows } = await db.query(
+    `INSERT INTO customer_identities (user_id, country_code, legal_full_name, date_of_birth, id_document_type,
+       id_document_number_enc, id_document_number_last4, id_document_number_hmac,
+       license_number_enc, license_number_last4, license_number_hmac, license_country_code, license_expiry,
+       address_enc, phone, id_front_media_id, id_back_media_id, license_front_media_id)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18) RETURNING id`,
+    [
+      userId, c.countryCode, c.fullName, c.dateOfBirth, c.idType,
+      encryptPII(c.idNumber), last4(c.idNumber), hmac(c.idNumber),
+      encryptPII(c.licenseNumber), last4(c.licenseNumber), hmac(c.licenseNumber), c.licenseCountry, c.licenseExpiry,
+      encryptPII(JSON.stringify({ line1: c.address, country: c.countryCode })), c.phone,
+      prev[0]?.id_front_media_id ?? null, prev[0]?.id_back_media_id ?? null, prev[0]?.license_front_media_id ?? null,
+    ],
+  );
+  await db.query("UPDATE users SET phone = COALESCE(phone, $2) WHERE id = $1", [userId, c.phone]);
+  return rows[0].id;
+}
+
+const pricingSnapshot = (v, money, settings, places) =>
+  JSON.stringify({ engine: "coolkids-v1", ...money, taxRateBps: settings["pricing.tax_rate_bps"],
+    taxInclusive: settings["pricing.tax_inclusive"], deliveryPolicy: places.delivery?.policy ?? vehicleFeePolicy(settings, v),
+    delivery: places.delivery && { distanceMeters: places.delivery.distanceMeters, durationSeconds: places.delivery.durationSeconds, source: places.delivery.source },
+    returnPlace: places.collect && { type: places.returnType, distanceMeters: places.collect.distanceMeters, durationSeconds: places.collect.durationSeconds, source: places.collect.source } });
+
+/** The booking's price lines (append-only: later changes are ADJUSTMENT rows). */
+async function writeItems(db, bookingId, v, days, money, places) {
+  const items = [
+    ["RENTAL", `ค่าเช่า ${v.brand} ${v.model} ${days} วัน`, days, money.daily, money.rental, null],
+    ...(money.delivery ? [["DELIVERY_FEE", `ค่าส่งรถ ${(places.delivery.distanceMeters / 1000).toFixed(1)} กม.`, 1, money.delivery, money.delivery, null]] : []),
+    ...(money.returnPickup ? [["RETURN_FEE", `ค่ารับรถคืน ${(places.collect.distanceMeters / 1000).toFixed(1)} กม.`, 1, money.returnPickup, money.returnPickup, null]] : []),
+    ...(money.discount ? [["DISCOUNT", v.promo_name, 1, -money.discount, -money.discount, money.promotionId]] : []),
+    ...(money.tax ? [["TAX", "VAT", 1, money.tax, money.tax, null]] : []),
+  ];
+  for (const [i, [type, desc, qty, unit, amount, promoId]] of items.entries()) {
+    await db.query(
+      `INSERT INTO booking_items (booking_id, item_type, description, promotion_id, quantity, unit_amount_minor, amount_minor, sort_order)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+      [bookingId, type, desc, promoId, qty, unit, amount, i],
+    );
+  }
+}
+
 /**
  * @param opts.staff the back-office user keying the booking in for this customer (auth is the customer then)
  */
 export async function createBooking(auth, input, ctx, opts = {}) {
   const settings = await getSettings();
   const now = new Date();
-  const pickupAt = new Date(input.pickupAt);
-  const returnAt = new Date(input.returnAt);
   const c = input.customer;
-
-  if (pickupAt < new Date(now.getTime() + settings["booking.min_lead_time_hours"] * HOUR)) {
-    throw BadRequest("Pick-up time is too soon", { pickupAt: [`ต้องจองล่วงหน้าอย่างน้อย ${settings["booking.min_lead_time_hours"]} ชั่วโมง`] });
-  }
-  if (pickupAt > new Date(now.getTime() + settings["booking.max_advance_days"] * DAY)) {
-    throw BadRequest("Pick-up date is too far ahead", { pickupAt: ["จองล่วงหน้าได้ไม่เกิน 1 ปี"] });
-  }
-  if (returnAt <= pickupAt) throw BadRequest("Return must be after pick-up", { returnAt: ["วันคืนรถต้องหลังวันรับรถ"] });
-  if (new Date(c.licenseExpiry) < returnAt) {
-    throw BadRequest("Driving licence expires before the rental ends", { "customer.licenseExpiry": ["ใบขับขี่หมดอายุก่อนวันคืนรถ"] });
-  }
+  const { pickupAt, returnAt } = checkPeriod(input, settings, now, Boolean(opts.staff));
 
   // Network call happens before the transaction so no DB locks are held while waiting on Google.
-  const delivery = input.fulfillment === "DELIVERY" ? await deliveryQuote(input.delivery, input.vehicleSlug) : null;
-  // Collecting the car somewhere else costs the same per km as delivering it there.
-  const returnType = input.returnType ?? "BRANCH";
-  const collect = returnType === "ADDRESS" ? await deliveryQuote(input.returnAddress, input.vehicleSlug) : returnType === "SAME_AS_DELIVERY" ? delivery : null;
+  const places = await placeQuotes(input, input.vehicleSlug);
+  const { returnType, deliveryAddress, returnAddress } = places;
 
   await expireStaleHolds();
 
@@ -164,18 +261,7 @@ export async function createBooking(auth, input, ctx, opts = {}) {
     async (db) => {
       const v = await findVehicleForBooking(db, input.vehicleSlug);
       if (!v) throw NotFound("Vehicle");
-
-      const minAge = Math.max(v.min_driver_age, Number(settings["booking.min_driver_age"]));
-      if (ageOn(c.dateOfBirth, pickupAt) < minAge) {
-        throw BadRequest(`Driver must be at least ${minAge}`, { "customer.dateOfBirth": [`ผู้ขับขี่ต้องมีอายุ ${minAge} ปีขึ้นไป`] });
-      }
-      const days = rentalDaysBetween(pickupAt, returnAt, settings["pricing.extra_hour_grace_minutes"]);
-      if (days < v.min_rental_days) throw BadRequest(`Minimum rental is ${v.min_rental_days} days`, { returnAt: [`เช่าขั้นต่ำ ${v.min_rental_days} วัน`] });
-      if (v.max_rental_days && days > v.max_rental_days) throw BadRequest(`Maximum rental is ${v.max_rental_days} days`);
-
-      const money = priceBooking(v, days, delivery?.feeMinor ?? 0, settings, collect?.feeMinor ?? 0);
-      // "โอน = จอง": only the reservation fee is paid online, after staff approve the documents.
-      money.dueNow = Math.min(Number(settings["booking.reservation_fee_minor"]), money.total);
+      const { days, money } = priceFor(v, c, settings, pickupAt, returnAt, places);
       const userId = auth.user.id;
       if (input.replaces) await dropDraft(db, input.replaces, opts.staff ? null : userId);
 
@@ -189,42 +275,8 @@ export async function createBooking(auth, input, ctx, opts = {}) {
         throw Conflict("TOO_MANY_HOLDS", "คุณมีการจองที่ยังไม่ชำระเงินหลายรายการ กรุณาชำระหรือรอให้หมดเวลาก่อนจองเพิ่ม");
       }
 
-      // Identity documents are versioned and encrypted; the booking points at this exact version.
-      // Same ID and licence numbers as last time → the photos already sent carry over (no re-upload).
-      const { rows: prev } = await db.query(
-        `SELECT id_front_media_id, id_back_media_id, license_front_media_id FROM customer_identities
-          WHERE user_id = $1 AND is_current AND deleted_at IS NULL AND id_document_type = $2
-            AND id_document_number_hmac = $3 AND license_number_hmac = $4`,
-        [userId, c.idType, hmac(c.idNumber), hmac(c.licenseNumber)],
-      );
-      await db.query("UPDATE customer_identities SET is_current = false WHERE user_id = $1 AND is_current", [userId]);
-      const { rows: idRows } = await db.query(
-        `INSERT INTO customer_identities (user_id, country_code, legal_full_name, date_of_birth, id_document_type,
-           id_document_number_enc, id_document_number_last4, id_document_number_hmac,
-           license_number_enc, license_number_last4, license_number_hmac, license_country_code, license_expiry,
-           address_enc, phone, id_front_media_id, id_back_media_id, license_front_media_id)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18) RETURNING id`,
-        [
-          userId, c.countryCode, c.fullName, c.dateOfBirth, c.idType,
-          encryptPII(c.idNumber), last4(c.idNumber), hmac(c.idNumber),
-          encryptPII(c.licenseNumber), last4(c.licenseNumber), hmac(c.licenseNumber), c.licenseCountry, c.licenseExpiry,
-          encryptPII(JSON.stringify({ line1: c.address, country: c.countryCode })), c.phone,
-          prev[0]?.id_front_media_id ?? null, prev[0]?.id_back_media_id ?? null, prev[0]?.license_front_media_id ?? null,
-        ],
-      );
-      await db.query("UPDATE users SET phone = COALESCE(phone, $2) WHERE id = $1", [userId, c.phone]);
-
+      const identityId = await writeIdentity(db, userId, c);
       const holdUntil = new Date(Date.now() + settings["booking.hold_minutes"] * 60_000);
-      const deliveryAddress = delivery
-        ? { address: delivery.address ?? input.delivery.address, placeId: delivery.placeId, lat: delivery.lat, lng: delivery.lng,
-            notes: input.delivery.notes ?? null, source: delivery.source }
-        : null;
-      const returnAddress = returnType === "SAME_AS_DELIVERY"
-        ? deliveryAddress
-        : collect
-          ? { address: collect.address ?? input.returnAddress.address, placeId: collect.placeId, lat: collect.lat, lng: collect.lng,
-              notes: input.returnAddress.notes ?? null, source: collect.source }
-          : null;
       const { rows: bRows } = await db.query(
         `INSERT INTO bookings (user_id, vehicle_id, customer_identity_id, pickup_location_id, return_location_id,
            fulfillment_type, delivery_address, pickup_at, return_at, status, hold_expires_at, currency, rental_days,
@@ -236,37 +288,20 @@ export async function createBooking(auth, input, ctx, opts = {}) {
                  'DRAFT',$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33)
          RETURNING id, booking_number`,
         [
-          userId, v.id, idRows[0].id, v.home_location_id, input.fulfillment,
+          userId, v.id, identityId, v.home_location_id, input.fulfillment,
           deliveryAddress ? JSON.stringify(deliveryAddress) : null, pickupAt, returnAt, holdUntil, v.currency, days,
           money.subtotal, money.discount, money.tax, money.total, money.deposit,
-          JSON.stringify({ engine: "coolkids-v1", ...money, taxRateBps: settings["pricing.tax_rate_bps"],
-            taxInclusive: settings["pricing.tax_inclusive"], deliveryPolicy: delivery?.policy ?? vehicleFeePolicy(settings, v),
-            delivery: delivery && { distanceMeters: delivery.distanceMeters, durationSeconds: delivery.durationSeconds, source: delivery.source },
-            returnPlace: collect && { type: returnType, distanceMeters: collect.distanceMeters, durationSeconds: collect.durationSeconds, source: collect.source } }),
+          pricingSnapshot(v, money, settings, places),
           money.promotionId, input.notes ?? null, c.countryCode,
-          delivery?.distanceMeters ?? null, delivery?.durationSeconds ?? null,
+          places.delivery?.distanceMeters ?? null, places.delivery?.durationSeconds ?? null,
           money.dueNow, input.areaOfUse ?? null, input.stayLocation ?? null, input.socialUrl ?? null, input.rentalPurpose ?? null,
           input.contactEmail ?? null,
-          returnType, returnAddress ? JSON.stringify(returnAddress) : null, collect?.distanceMeters ?? null, collect?.durationSeconds ?? null,
+          returnType, returnAddress ? JSON.stringify(returnAddress) : null, places.collect?.distanceMeters ?? null, places.collect?.durationSeconds ?? null,
           opts.staff?.user.id ?? null, opts.staff ? "ADMIN" : "WEB",
         ],
       );
       const booking = bRows[0];
-
-      const items = [
-        ["RENTAL", `ค่าเช่า ${v.brand} ${v.model} ${days} วัน`, days, money.daily, money.rental, null],
-        ...(money.delivery ? [["DELIVERY_FEE", `ค่าส่งรถ ${(delivery.distanceMeters / 1000).toFixed(1)} กม.`, 1, money.delivery, money.delivery, null]] : []),
-        ...(money.returnPickup ? [["RETURN_FEE", `ค่ารับรถคืน ${(collect.distanceMeters / 1000).toFixed(1)} กม.`, 1, money.returnPickup, money.returnPickup, null]] : []),
-        ...(money.discount ? [["DISCOUNT", v.promo_name, 1, -money.discount, -money.discount, money.promotionId]] : []),
-        ...(money.tax ? [["TAX", "VAT", 1, money.tax, money.tax, null]] : []),
-      ];
-      for (const [i, [type, desc, qty, unit, amount, promoId]] of items.entries()) {
-        await db.query(
-          `INSERT INTO booking_items (booking_id, item_type, description, promotion_id, quantity, unit_amount_minor, amount_minor, sort_order)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-          [booking.id, type, desc, promoId, qty, unit, amount, i],
-        );
-      }
+      await writeItems(db, booking.id, v, days, money, places);
 
       // The EXCLUDE constraint rejects an overlapping hold → 409 VEHICLE_UNAVAILABLE.
       await db.query(
@@ -363,7 +398,7 @@ export const BOOKING_SELECT = `
             FROM payment_slips s WHERE s.booking_id = b.id ORDER BY s.created_at DESC LIMIT 1) AS slip,
          (SELECT json_agg(json_build_object('status', h.to_status, 'at', h.changed_at) ORDER BY h.changed_at)
             FROM booking_status_history h WHERE h.booking_id = b.id) AS timeline,
-         (SELECT json_agg(json_build_object('type', i.item_type, 'description', i.description, 'quantity', i.quantity,
+         (SELECT json_agg(json_build_object('type', i.item_type, 'adjusts', i.adjusts, 'description', i.description, 'quantity', i.quantity,
                                             'amountMinor', i.amount_minor) ORDER BY i.sort_order)
             FROM booking_items i WHERE i.booking_id = b.id) AS items
     FROM bookings b
@@ -391,6 +426,20 @@ function balanceDue(r) {
   };
 }
 const BALANCE_STATUSES = ["CONFIRMED", "PREPARING", "READY", "IN_DELIVERY", "ACTIVE"];
+
+/** What each line comes to (its own rows + staff adjustments): the price summary. */
+export function priceBreakdown(items) {
+  const sum = (pick) => items.filter(pick).reduce((n, i) => n + Number(i.amountMinor), 0);
+  const line = (kind) => sum((i) => (i.adjusts ?? i.type) === kind && i.type !== "DISCOUNT");
+  return {
+    rentalMinor: line("RENTAL"),
+    deliveryMinor: line("DELIVERY_FEE"),
+    returnMinor: line("RETURN_FEE"),
+    taxMinor: line("TAX"),
+    promoDiscountMinor: -sum((i) => i.type === "DISCOUNT"),
+    staffDiscountMinor: -line("DISCOUNT"),
+  };
+}
 
 export function bookingDto(r) {
   return {
@@ -431,6 +480,7 @@ export function bookingDto(r) {
     money: {
       currency: r.currency, subtotalMinor: r.subtotal_minor, discountMinor: r.discount_minor, taxMinor: r.tax_minor,
       totalMinor: r.total_minor, depositMinor: r.deposit_minor, items: r.items ?? [],
+      breakdown: priceBreakdown(r.items ?? []),
       dueNowMinor: dueNow(r),
       // Balance at pick-up: rental + delivery + security deposit − what was paid so far (or, unpaid, the fee due now).
       payAtPickupMinor: balanceDue(r).rent + balanceDue(r).deposit,
@@ -1081,6 +1131,237 @@ export async function confirmOffline(staff, number, { paidMinor, method, note },
       await confirmBookingTx(db, b, paymentId, "ยืนยันการจองแล้ว ขอบคุณที่ใช้บริการ Coolkids");
       await recordAudit(db, ctx, {
         action: "booking.confirmed_offline", entityType: "booking", entityId: b.id, after: { paidMinor, method, note: note ?? null },
+      });
+    },
+    { actorId: staff.user.id },
+  );
+  return getBooking(staff, number);
+}
+
+// ---------------------------------------------------------------- staff: edit details, adjust prices
+
+// Staff may change a booking until the car is back (an ACTIVE rental can be extended).
+const STAFF_EDITABLE = ["PENDING", "CONFIRMED", "PREPARING", "READY", "IN_DELIVERY", "ACTIVE"];
+const assertStaffEditable = (b) => {
+  if (!STAFF_EDITABLE.includes(b.status)) throw Conflict("BOOKING_CLOSED", "การจองนี้จบหรือยกเลิกไปแล้ว แก้ไขไม่ได้");
+};
+
+/**
+ * What each price line comes to now. booking_items is append-only, so a change is an
+ * ADJUSTMENT row pointing at the line it corrects; a staff discount adjusts DISCOUNT.
+ */
+async function priceLines(db, bookingId) {
+  const { rows } = await db.query(
+    `SELECT item_type, adjusts, sum(amount_minor)::bigint AS n, max(sort_order) AS last
+       FROM booking_items WHERE booking_id = $1 GROUP BY item_type, adjusts`,
+    [bookingId],
+  );
+  const sum = (kind) => rows.filter((r) => (r.adjusts ?? r.item_type) === kind && r.item_type !== "DISCOUNT").reduce((n, r) => n + Number(r.n), 0);
+  return {
+    rental: sum("RENTAL"),
+    delivery: sum("DELIVERY_FEE"),
+    returnPickup: sum("RETURN_FEE"),
+    tax: sum("TAX"),
+    promo: -rows.filter((r) => r.item_type === "DISCOUNT").reduce((n, r) => n + Number(r.n), 0),
+    staffDiscount: -sum("DISCOUNT"),
+    last: Math.max(-1, ...rows.map((r) => r.last)),
+  };
+}
+
+const ADJUSTABLE = [
+  ["RENTAL", "rental", "ค่าเช่า"],
+  ["DELIVERY_FEE", "delivery", "ค่าส่งรถ"],
+  ["RETURN_FEE", "returnPickup", "ค่ารับรถคืน"],
+  ["TAX", "tax", "VAT"],
+];
+/** Appends one ADJUSTMENT row per line whose amount changes (`why` heads its description). */
+async function appendAdjustments(db, bookingId, now, want, why) {
+  const rows = [
+    ...ADJUSTABLE.map(([kind, key, label]) => [kind, want[key] - now[key], `${why}: ${label}`]),
+    ["DISCOUNT", now.staffDiscount - want.staffDiscount, "ส่วนลดจากแอดมิน"],
+  ].filter(([, delta]) => delta !== 0);
+  let order = now.last;
+  for (const [kind, delta, description] of rows) {
+    order += 1;
+    await db.query(
+      `INSERT INTO booking_items (booking_id, item_type, adjusts, description, quantity, unit_amount_minor, amount_minor, sort_order)
+       VALUES ($1, 'ADJUSTMENT', $2, $3, 1, $4, $4, $5)`,
+      [bookingId, kind, description, delta, order],
+    );
+  }
+}
+
+/** Totals from the line amounts: promotion + staff discount, VAT when prices exclude it. */
+function totalsOf({ rental, delivery, returnPickup, promo, staffDiscount, deposit }, settings) {
+  const subtotal = rental + delivery + returnPickup;
+  const discount = Math.min(promo, subtotal) + staffDiscount;
+  if (discount > subtotal) throw BadRequest("ส่วนลดมากกว่ายอดค่าเช่ารวม", { discountMinor: ["ส่วนลดมากกว่ายอดค่าเช่ารวม"] });
+  const tax = settings["pricing.tax_inclusive"] ? 0 : Math.round(((subtotal - discount) * settings["pricing.tax_rate_bps"]) / 10_000);
+  return { rental, delivery, returnPickup, staffDiscount, deposit, subtotal, discount, tax, total: subtotal - discount + tax };
+}
+
+/**
+ * Everything the booking form shows, for staff editing a booking: dates, places and the
+ * renter's details with the full ID / licence numbers (decrypted; the read is audited).
+ */
+export async function staffBookingForm(staff, number, ctx) {
+  const b = await loadBooking(pool, number, staff);
+  assertStaffEditable(b);
+  const { rows } = await pool.query(
+    `SELECT ci.*, to_char(ci.date_of_birth, 'YYYY-MM-DD') AS dob, to_char(ci.license_expiry, 'YYYY-MM-DD') AS license_exp
+       FROM customer_identities ci WHERE ci.id = $1`,
+    [b.customer_identity_id],
+  );
+  const ci = rows[0];
+  let address = "";
+  try {
+    address = JSON.parse(decryptPII(ci.address_enc)).line1 ?? "";
+  } catch {
+    // unreadable (retired key): staff type it again
+  }
+  await recordAudit(pool, ctx, { action: "booking.form_read", entityType: "booking", entityId: b.id });
+  return {
+    number: b.booking_number,
+    vehicleSlug: b.vehicle_slug,
+    pickupAt: b.pickup_at,
+    returnAt: b.return_at,
+    fulfillment: b.fulfillment_type,
+    delivery: b.delivery_address,
+    returnType: b.return_type ?? "BRANCH",
+    returnAddress: b.return_address,
+    notes: b.customer_notes,
+    areaOfUse: b.area_of_use,
+    stayLocation: b.stay_location,
+    socialUrl: b.social_url,
+    rentalPurpose: b.rental_purpose,
+    contactEmail: b.contact_email,
+    customer: {
+      fullName: ci.legal_full_name, phone: ci.phone, countryCode: ci.country_code, idType: ci.id_document_type,
+      idNumber: decryptPII(ci.id_document_number_enc), dateOfBirth: ci.dob,
+      licenseNumber: decryptPII(ci.license_number_enc), licenseCountry: ci.license_country_code,
+      licenseExpiry: ci.license_exp, address,
+    },
+  };
+}
+
+/**
+ * Staff change a booking's details in place (same number, payments and photos kept):
+ * dates, pick-up / return places, renter's details. Rent and trip fees are worked out
+ * again for the new dates and places (promotion, staff discount and deposit stay), the
+ * car hold moves with the dates and the contract is issued again.
+ */
+export async function updateStaffBooking(staff, number, input, ctx) {
+  const settings = await getSettings();
+  const now = new Date();
+  const current = await loadBooking(pool, number, staff);
+  assertStaffEditable(current);
+  // a pick-up time left as it was is fine even when it is long past (rental already running)
+  const samePickup = new Date(input.pickupAt).getTime() === new Date(current.pickup_at).getTime();
+  const { returnAt } = checkPeriod(samePickup ? { ...input, pickupAt: now.toISOString() } : input, settings, now, true);
+  const pickup = samePickup ? new Date(current.pickup_at) : new Date(input.pickupAt);
+  const places = await placeQuotes(input, current.vehicle_slug);
+  const c = input.customer;
+
+  await withTransaction(
+    async (db) => {
+      const b = await loadBooking(db, number, staff, { lock: true });
+      assertStaffEditable(b);
+      const v = await findVehicleForBooking(db, b.vehicle_slug);
+      if (!v) throw NotFound("Vehicle");
+      const { days, money: priced } = priceFor(v, c, settings, pickup, returnAt, places);
+      const lines = await priceLines(db, b.id);
+      const subtotal = priced.rental + priced.delivery + priced.returnPickup;
+      const money = totalsOf({
+        rental: priced.rental, delivery: priced.delivery, returnPickup: priced.returnPickup, promo: lines.promo,
+        staffDiscount: Math.min(lines.staffDiscount, subtotal - Math.min(lines.promo, subtotal)), deposit: Number(b.deposit_minor),
+      }, settings);
+      await appendAdjustments(db, b.id, lines, money, `แก้ไขการจอง ${days} วัน`);
+      const dueNow = b.status === "PENDING" ? Math.min(Number(settings["booking.reservation_fee_minor"]), money.total) : Number(b.amount_due_now_minor);
+
+      const identityId = await writeIdentity(db, b.user_id, c, b.customer_identity_id);
+      await db.query(
+        `UPDATE bookings SET customer_identity_id = $2, fulfillment_type = $3, delivery_address = $4, pickup_at = $5, return_at = $6,
+                rental_days = $7, subtotal_minor = $8, discount_minor = $9, tax_minor = $10, total_minor = $11, amount_due_now_minor = $12,
+                pricing_snapshot = $13, customer_notes = $14, customer_country = $15,
+                delivery_distance_m = $16, delivery_duration_s = $17, area_of_use = $18, stay_location = $19, social_url = $20,
+                rental_purpose = $21, contact_email = COALESCE($22, contact_email), return_type = $23, return_address = $24,
+                return_distance_m = $25, return_duration_s = $26
+          WHERE id = $1`,
+        [
+          b.id, identityId, input.fulfillment, places.deliveryAddress ? JSON.stringify(places.deliveryAddress) : null, pickup, returnAt,
+          days, money.subtotal, money.discount, money.tax, money.total, dueNow,
+          pricingSnapshot(v, { ...priced, ...money }, settings, places), input.notes ?? null, c.countryCode,
+          places.delivery?.distanceMeters ?? null, places.delivery?.durationSeconds ?? null,
+          input.areaOfUse ?? null, input.stayLocation ?? null, input.socialUrl ?? null, input.rentalPurpose ?? null,
+          input.contactEmail ?? null, places.returnType, places.returnAddress ? JSON.stringify(places.returnAddress) : null,
+          places.collect?.distanceMeters ?? null, places.collect?.durationSeconds ?? null,
+        ],
+      );
+
+      // The car hold follows the new dates; the EXCLUDE constraint rejects a clash → 409.
+      await db.query(
+        `UPDATE vehicle_availability_blocks SET during = tstzrange($2, $3::timestamptz + make_interval(mins => $4), '[)')
+          WHERE booking_id = $1 AND block_type = 'BOOKING' AND released_at IS NULL`,
+        [b.id, pickup, returnAt, v.turnaround_minutes],
+      );
+
+      const { rows: u } = await db.query("SELECT email FROM users WHERE id = $1", [b.user_id]);
+      await reissueContract(db, { bookingId: b.id, userId: b.user_id }, () =>
+        buildSnapshot({
+          company: settings["company.legal"],
+          contractNumber: null,
+          issuedAt: now,
+          customer: { ...c, email: input.contactEmail ?? b.contact_email ?? u[0]?.email },
+          vehicle: v,
+          booking: { pickupAt: pickup, returnAt, rentalDays: days, areaOfUse: input.areaOfUse, purpose: input.rentalPurpose },
+          money: { ...money, dueNow },
+          delivery: places.deliveryAddress,
+          returnPlace: places.returnAddress,
+        }),
+      );
+      await recordAudit(db, ctx, {
+        action: "booking.edited_by_staff", entityType: "booking", entityId: b.id,
+        before: { pickupAt: b.pickup_at, returnAt: b.return_at, total: Number(b.total_minor), fulfillment: b.fulfillment_type },
+        after: { pickupAt: pickup, returnAt, total: money.total, fulfillment: input.fulfillment },
+      });
+    },
+    { actorId: staff.user.id },
+  );
+  return getBooking(staff, number);
+}
+
+/**
+ * Staff set the prices by hand: rent, delivery and collection fees, deposit, and a discount
+ * ("ส่วนลดจากแอดมิน", taken off the total). The contract is issued again with the new amounts.
+ */
+export async function adjustBookingPrice(staff, number, input, ctx) {
+  const settings = await getSettings();
+  await withTransaction(
+    async (db) => {
+      const b = await loadBooking(db, number, staff, { lock: true });
+      assertStaffEditable(b);
+      const lines = await priceLines(db, b.id);
+      const money = totalsOf({
+        rental: input.rentalMinor ?? lines.rental,
+        delivery: input.deliveryMinor ?? lines.delivery,
+        returnPickup: input.returnMinor ?? lines.returnPickup,
+        promo: lines.promo,
+        staffDiscount: input.discountMinor ?? lines.staffDiscount,
+        deposit: input.depositMinor ?? Number(b.deposit_minor),
+      }, settings);
+      await appendAdjustments(db, b.id, lines, money, "แอดมินปรับราคา");
+      const dueNow = b.status === "PENDING" ? Math.min(Number(settings["booking.reservation_fee_minor"]), money.total) : Number(b.amount_due_now_minor);
+      await db.query(
+        `UPDATE bookings SET subtotal_minor = $2, discount_minor = $3, tax_minor = $4, total_minor = $5, deposit_minor = $6,
+                amount_due_now_minor = $7 WHERE id = $1`,
+        [b.id, money.subtotal, money.discount, money.tax, money.total, money.deposit, dueNow],
+      );
+      await reissueContract(db, { bookingId: b.id, userId: b.user_id }, (old) => ({ ...old, money: snapshotMoney({ ...money, dueNow }) }));
+      await recordAudit(db, ctx, {
+        action: "booking.price_adjusted", entityType: "booking", entityId: b.id,
+        before: { total: Number(b.total_minor), deposit: Number(b.deposit_minor), ...lines },
+        after: { total: money.total, deposit: money.deposit, rental: money.rental, delivery: money.delivery,
+          returnPickup: money.returnPickup, staffDiscount: money.staffDiscount },
       });
     },
     { actorId: staff.user.id },

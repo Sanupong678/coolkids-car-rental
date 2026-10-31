@@ -307,9 +307,10 @@ export async function contractPrint(bookingId) {
             l.name AS branch_name, l.city AS branch_city,
             ct.id AS contract_id, ct.contract_number, ct.status AS contract_status, ct.data_snapshot, ct.signed_at,
             ct.signature_media_id, ct.created_at AS contract_created_at,
-            (SELECT COALESCE(sum(amount_minor), 0) FROM booking_items WHERE booking_id = b.id AND item_type = 'RENTAL') AS rental_minor,
-            (SELECT COALESCE(sum(amount_minor), 0) FROM booking_items WHERE booking_id = b.id AND item_type = 'DELIVERY_FEE') AS delivery_minor,
-            (SELECT COALESCE(-sum(amount_minor), 0) FROM booking_items WHERE booking_id = b.id AND item_type = 'DISCOUNT') AS discount_minor
+            -- each line with its staff adjustments (booking_items is append-only)
+            (SELECT COALESCE(sum(amount_minor), 0) FROM booking_items WHERE booking_id = b.id AND COALESCE(adjusts, item_type) = 'RENTAL') AS rental_minor,
+            (SELECT COALESCE(sum(amount_minor), 0) FROM booking_items WHERE booking_id = b.id AND COALESCE(adjusts, item_type) = 'DELIVERY_FEE') AS delivery_minor,
+            (SELECT COALESCE(-sum(amount_minor), 0) FROM booking_items WHERE booking_id = b.id AND COALESCE(adjusts, item_type) = 'DISCOUNT') AS discount_minor
        FROM bookings b
        JOIN vehicles v ON v.id = b.vehicle_id
        JOIN locations l ON l.id = b.pickup_location_id

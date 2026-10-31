@@ -23,7 +23,8 @@ watch(() => props.modelValue, (v) => Object.assign(form, v), { deep: true })
 const locations = computed(() => site.locations)
 const days = computed(() => rentalDays(form.from, form.to))
 const minDate = computed(() => {
-  const d = new Date(Date.now() + 2 * 3_600_000)
+  // no notice needed: from the current hour on
+  const d = new Date()
   d.setMinutes(0, 0, 0)
   return toLocalInput(d)
 })
