@@ -134,17 +134,17 @@ export async function deliveryQuote(input, vehicleSlug) {
 // ---------------------------------------------------------------- create
 
 /** Checks on the period and licence that need no database (customer form, staff form, staff edit). */
-function checkPeriod(input, settings, now, staff) {
+function checkPeriod(input, settings, now, staff, { keepPickup = false } = {}) {
   const pickupAt = new Date(input.pickupAt);
   const returnAt = new Date(input.returnAt);
   // No notice needed (urgent walk-in / phone bookings): the form's hour slots may sit a
   // little in the past, and staff may key in a hand-over that already started today.
   const lead = Number(settings["booking.min_lead_time_hours"]);
   const earliest = staff ? now.getTime() - DAY : lead > 0 ? now.getTime() + lead * HOUR : now.getTime() - HOUR;
-  if (pickupAt < new Date(earliest)) {
+  if (!keepPickup && pickupAt < new Date(earliest)) {
     throw BadRequest("Pick-up time is too soon", { pickupAt: [lead > 0 && !staff ? `ต้องจองล่วงหน้าอย่างน้อย ${lead} ชั่วโมง` : "เวลารับรถผ่านไปแล้ว"] });
   }
-  if (pickupAt > new Date(now.getTime() + settings["booking.max_advance_days"] * DAY)) {
+  if (!keepPickup && pickupAt > new Date(now.getTime() + settings["booking.max_advance_days"] * DAY)) {
     throw BadRequest("Pick-up date is too far ahead", { pickupAt: ["จองล่วงหน้าได้ไม่เกิน 1 ปี"] });
   }
   if (returnAt <= pickupAt) throw BadRequest("Return must be after pick-up", { returnAt: ["วันคืนรถต้องหลังวันรับรถ"] });
@@ -1257,8 +1257,7 @@ export async function updateStaffBooking(staff, number, input, ctx) {
   assertStaffEditable(current);
   // a pick-up time left as it was is fine even when it is long past (rental already running)
   const samePickup = new Date(input.pickupAt).getTime() === new Date(current.pickup_at).getTime();
-  const { returnAt } = checkPeriod(samePickup ? { ...input, pickupAt: now.toISOString() } : input, settings, now, true);
-  const pickup = samePickup ? new Date(current.pickup_at) : new Date(input.pickupAt);
+  const { pickupAt: pickup, returnAt } = checkPeriod(input, settings, now, true, { keepPickup: samePickup });
   const places = await placeQuotes(input, current.vehicle_slug);
   const c = input.customer;
 

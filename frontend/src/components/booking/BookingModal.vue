@@ -124,6 +124,8 @@ const returnFee = computed(() =>
 const estimate = computed(() => daily.value * days.value + deliveryFee.value + returnFee.value)
 const currency = computed(() => v.value?.price.currency ?? booking.value?.money.currency ?? 'THB')
 
+// same rule as the server: letters (any script) and digits, with the usual separators
+const DOC_NO = /^[\p{L}\p{N} ./-]+$/u
 const thaiIdOk = computed(() => c.value.idType !== 'NATIONAL_ID' || c.value.countryCode !== 'TH' || /^\d{13}$/.test(c.value.idNumber.replace(/[\s-]/g, '')))
 // Everything still missing or wrong on the details form, in form order, so the
 // customer is told exactly what to fix instead of facing a dead button.
@@ -140,9 +142,11 @@ const problems = computed(() => {
   if (blank(c.value.idNumber, 1)) add('idNumber', t(c.value.idType === 'PASSPORT' ? 'bk.p.passport' : 'bk.p.idNumber'))
   else if (blank(c.value.idNumber, 5)) add('idNumber', t('bk.p.idShort'))
   else if (!thaiIdOk.value) add('idNumber', t('bk.p.thaiId'))
+  else if (!DOC_NO.test(c.value.idNumber.trim())) add('idNumber', t('bk.p.docNo'))
   if (!c.value.dateOfBirth) add('dateOfBirth', t('bk.p.dob'))
   if (blank(c.value.address, 5)) add('address', t('bk.p.address'))
   if (blank(c.value.licenseNumber, 4)) add('licenseNumber', t('bk.p.licenceNo'))
+  else if (!DOC_NO.test(c.value.licenseNumber.trim())) add('licenseNumber', t('bk.p.docNo'))
   if (!c.value.licenseExpiry) add('licenseExpiry', t('bk.p.expiry'))
   if (!decl.value.hasOriginalLicense) add('hasOriginalLicense', t('bk.p.hasOriginal'))
   if (!decl.value.infoMatchesLicense) add('infoMatchesLicense', t('bk.p.matches'))
@@ -263,7 +267,25 @@ const backToDetails = () => goStep(1)
 // After the details: the price summary (a booking already sent goes to "sent").
 async function afterDetails() {
   const review = booking.value.review?.status
-  await goStep(!props.editNumber && (review === 'SUBMITTED' || review === 'APPROVED') ? 4 : 2)
+  const target = jumpAfter ?? (!props.editNumber && (review === 'SUBMITTED' || review === 'APPROVED') ? 4 : 2)
+  jumpAfter = null
+  await goStep(target)
+}
+// Staff edit: each step heading opens that page (changed details are saved first).
+let jumpAfter = null
+const canJump = (n) => Boolean(props.editNumber && booking.value) && n !== step.value && n < 4 && (n !== 3 || Boolean(booking.value.documents))
+function jump(n) {
+  if (!canJump(n) || busy.value) return
+  if (step.value === 2 && priceChanged.value) return void (error.value = t('bk.adjSaveFirst'))
+  if (step.value === 1 && sentBody.value !== JSON.stringify(detailsBody())) {
+    jumpAfter = n
+    return submitDetails()
+  }
+  goStep(n)
+}
+function onContinue() {
+  jumpAfter = null
+  submitDetails()
 }
 async function goStep(n) {
   error.value = ''
@@ -478,13 +500,16 @@ const HEADS = { 1: ['car', props.editNumber ? 'bk.headEdit' : 'bk.head1'], 2: ['
       </header>
       <ol class="steps" :aria-label="t('bk.stepsLabel')">
         <li v-for="(s, i) in STEPS" :key="s" :class="{ on: step === i + 1, done: step > i + 1 }" :aria-current="step === i + 1 ? 'step' : undefined">
-          <span>{{ step > i + 1 ? '✓' : i + 1 }}</span>{{ s }}
+          <button v-if="canJump(i + 1)" type="button" class="jump" :title="t('bk.jumpTo', { step: s })" @click="jump(i + 1)">
+            <span>{{ step > i + 1 ? '✓' : i + 1 }}</span>{{ s }}
+          </button>
+          <template v-else><span>{{ step > i + 1 ? '✓' : i + 1 }}</span>{{ s }}</template>
         </li>
       </ol>
 
       <div ref="scroller" class="body">
         <!-- 1. details -->
-        <form v-if="step === 1 && v" id="bk-details" class="details" novalidate @submit.prevent="submitDetails">
+        <form v-if="step === 1 && v" id="bk-details" class="details" novalidate @submit.prevent="onContinue">
           <section v-if="saved && savedChoice === null" class="saved-ask" role="group" aria-labelledby="saved-title">
             <div>
               <strong id="saved-title">{{ t('bk.savedTitle') }}</strong>
@@ -725,6 +750,9 @@ const HEADS = { 1: ['car', props.editNumber ? 'bk.headEdit' : 'bk.head1'], 2: ['
             {{ priceChanged ? t('bk.adjSaveFirst') : t('bk.continue') }}
           </button>
         </template>
+        <template v-else-if="step === 3 && editDone">
+          <button type="button" class="primary wide" :disabled="busy" @click="close">{{ t('bk.editDone') }}</button>
+        </template>
         <template v-else-if="step === 3 && booking?.documents && staff">
           <div class="staff-pay">
             <strong class="how">{{ t('bk.staffHow') }}</strong>
@@ -868,6 +896,24 @@ h2 small {
   font-weight: 700;
   font-size: 0.72rem;
   color: #6b6e7a;
+}
+.steps .jump {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px 4px 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.steps .jump:hover,
+.steps .jump:focus-visible {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 3px;
 }
 .steps .on {
   color: #121319;

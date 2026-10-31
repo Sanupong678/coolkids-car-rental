@@ -51,7 +51,7 @@ function detailRows(b) {
     ["โทร", b.customer_phone],
     ["อีเมล", b.contact_email],
     ["เอกสาร", b.id_document_type === "PASSPORT" ? "พาสปอร์ต" : "บัตรประชาชน"],
-    ["Facebook / IG", b.social_url],
+    ["Facebook / IG / LINE", b.social_url],
     ["ที่พัก", b.stay_location],
     ["พื้นที่ใช้รถ", b.area_of_use],
     ["วัตถุประสงค์", { TRAVEL: "ท่องเที่ยว", REPLACEMENT: "ใช้แทนรถที่ซ่อม" }[b.rental_purpose] ?? b.rental_purpose],

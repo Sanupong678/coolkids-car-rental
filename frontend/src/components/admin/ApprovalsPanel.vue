@@ -29,7 +29,9 @@ const LABEL = {
 const waiting = computed(() => rows.value.filter((b) => b.review.status === 'SUBMITTED').length)
 // The booking form appends "· https://maps.google.com/?q=lat,lng" when the customer drops a pin.
 const MAP_LINK = /\s*·?\s*https:\/\/maps\.google\.com\/\?q=[-\d.]+,[-\d.]+/
-const socialHref = (s) => (/^https?:\/\//.test(s) ? s : /\./.test(s) ? `https://${s}` : null)
+// a link only for real addresses (an IG name like "itanick.kt" or a LINE ID stays text)
+const socialHref = (s) =>
+  /^https?:\/\//i.test(s) ? s : /^(www\.)?(facebook\.com|fb\.com|instagram\.com|line\.me)\//i.test(s) ? `https://${s}` : null
 
 async function loadPhotos(b) {
   for (const [kind, has] of Object.entries(b.documents?.uploaded ?? {})) {

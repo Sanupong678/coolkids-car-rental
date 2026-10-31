@@ -14,6 +14,9 @@ export const deliveryInput = z
   })
   .refine((d) => d.placeId || d.address || (d.lat != null && d.lng != null), { message: "Address required", path: ["address"] });
 
+// Document numbers: letters (any script) and digits, with the usual separators.
+const DOC_NO = /^[\p{L}\p{N} ./-]+$/u;
+
 const bookingFields = z.object({
     vehicleSlug: z.string().regex(/^[a-z0-9-]+$/).max(120),
     pickupAt: z.iso.datetime({ offset: true }),
@@ -27,7 +30,8 @@ const bookingFields = z.object({
     // LINE flow extras (old chat form): where the car is used, where the renter stays, their Facebook / IG.
     areaOfUse: z.string().trim().min(2).max(120).optional(),
     stayLocation: z.string().trim().min(3).max(300).optional(),
-    socialUrl: z.string().trim().max(300).regex(/^(https?:\/\/)?[\w.-]+\.[a-z]{2,}(\/\S*)?$|^@?[\w.]{2,60}$/i, "ใส่ลิงก์ Facebook / IG หรือชื่อบัญชี").optional(),
+    // Facebook / IG / LINE: a link, an account name or a LINE ID (Thai names allowed)
+    socialUrl: z.string().trim().min(2).max(300).regex(/^[^<>"]+$/, "ใส่ลิงก์ Facebook / IG หรือชื่อบัญชี / LINE ID").optional(),
     rentalPurpose: z.enum(["TRAVEL", "REPLACEMENT"]).optional(),
     // Language the renter read and acknowledged the rental terms in (popup before booking).
     termsLocale: z.enum(["th", "en", "zh"]).optional(),
@@ -40,9 +44,9 @@ const bookingFields = z.object({
       phone: z.string().trim().regex(/^\+?[0-9 ()-]{6,20}$/, "Invalid phone number"),
       countryCode: country,
       idType: z.enum(["NATIONAL_ID", "PASSPORT"]),
-      idNumber: z.string().trim().min(5).max(30).regex(/^[A-Za-z0-9 -]+$/, "Letters and numbers only"),
+      idNumber: z.string().trim().min(5).max(30).regex(DOC_NO, "เลขบัตร / พาสปอร์ต ใส่ได้เฉพาะตัวอักษรและตัวเลข"),
       dateOfBirth: isoDate,
-      licenseNumber: z.string().trim().min(4).max(30).regex(/^[A-Za-z0-9 -]+$/, "Letters and numbers only"),
+      licenseNumber: z.string().trim().min(4).max(30).regex(DOC_NO, "เลขใบขับขี่ ใส่ได้เฉพาะตัวอักษรและตัวเลข"),
       licenseCountry: country,
       licenseExpiry: isoDate,
       address: z.string().trim().min(5).max(300),
