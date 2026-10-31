@@ -208,11 +208,13 @@ export async function sendContract(auth, bookingId, { via, email }, ctx) {
 // ---------------------------------------------------------------- booking timeline (cars × days)
 
 // Bar colour (owner 2026-10-31): rent still owed (only the reservation fee / deposit
-// paid) → orange; car delivered → grey; not delivered yet → blue.
+// paid) → orange; not delivered yet → blue; with the renter, waiting to come back → green;
+// returned → grey.
 const PHASE = (r) => {
   if (r.status === "PENDING") return "pending"; // รออนุมัติ / รอชำระ
   if (Number(r.rent_paid_minor) < Number(r.total_minor)) return "unpaid"; // ค้างค่าเช่า
-  if (r.status === "ACTIVE" || r.status === "COMPLETED") return "done"; // ส่งแล้ว
+  if (r.status === "ACTIVE") return "out"; // รอรับรถคืน
+  if (r.status === "COMPLETED") return "done"; // คืนรถแล้ว
   return "handover"; // รอส่งรถ
 };
 

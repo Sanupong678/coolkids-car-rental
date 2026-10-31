@@ -67,7 +67,8 @@ const PHASE = {
   pending: ['รออนุมัติ', 'pending'],
   unpaid: ['ค้างค่าเช่า', 'unpaid'],
   handover: ['รอส่งรถ', 'handover'],
-  done: ['ส่งแล้ว', 'done'],
+  out: ['รอรับรถคืน', 'out'],
+  done: ['คืนรถแล้ว', 'done'],
 }
 const rows = computed(() =>
   (data.value?.cars ?? []).map((c) => ({
@@ -172,7 +173,8 @@ function closeStaff() {
     <footer class="legend">
       <span><i class="pending" /> รออนุมัติ</span>
       <span><i class="handover" /> รอส่งรถ</span>
-      <span><i class="done" /> ส่งแล้ว</span>
+      <span><i class="out" /> รอรับรถคืน</span>
+      <span><i class="done" /> คืนรถแล้ว</span>
       <span><i class="unpaid" /> ค้างค่าเช่า (จ่ายแค่มัดจำ)</span>
       <span><i class="maint" /> ซ่อมบำรุง</span>
     </footer>
@@ -369,6 +371,9 @@ header p {
 }
 .handover {
   background: #2fa8d8;
+}
+.out {
+  background: #22a35a;
 }
 .unpaid {
   background: #f08a3c;
