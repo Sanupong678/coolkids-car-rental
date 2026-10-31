@@ -205,10 +205,15 @@ async function submitDetails() {
       contactEmail: use.value.contactEmail.trim() || undefined,
       customer: { ...c.value, fullName: c.value.fullName.trim(), phone: c.value.phone.trim(), idNumber: c.value.idNumber.trim(), licenseNumber: c.value.licenseNumber.trim() },
       declarations: { hasOriginalLicense: true, infoMatchesLicense: true },
+      ...(props.staff ? { customerEmail: customerEmail.value.trim() || undefined } : {}),
     }
-    booking.value = props.staff
-      ? await staffCreateBooking({ ...body, customerEmail: customerEmail.value.trim() || undefined })
-      : await createBooking(body)
+    // Back from the documents step: nothing changed → carry on with the same booking;
+    // changed → a new booking replaces the unfinished one (photos carry over).
+    const sent = JSON.stringify(body)
+    if (booking.value && sent === sentBody.value) return void (await afterDetails())
+    const replaces = booking.value && ['DRAFT', 'CHANGES_REQUESTED'].includes(booking.value.review?.status) ? booking.value.number : undefined
+    booking.value = props.staff ? await staffCreateBooking({ ...body, replaces }) : await createBooking({ ...body, replaces })
+    sentBody.value = sent
     await afterDetails()
   } catch (err) {
     error.value = explain(err)
@@ -233,6 +238,15 @@ function onPick({ address, lat, lng }) {
 // ---------------------------------------------------------------- step 2
 // Photos go to private storage right away; staff see them once the booking is sent.
 const onDocs = (documents) => (booking.value = { ...booking.value, documents })
+// What step 1 last sent; set only when the details were typed in this form, so
+// "แก้ไขรายละเอียด" (back to step 1) shows them again. A resumed booking has none.
+const sentBody = ref(null)
+async function backToDetails() {
+  error.value = ''
+  step.value = 1
+  await nextTick()
+  scroller.value?.scrollTo({ top: 0 })
+}
 async function afterDetails() {
   const review = booking.value.review?.status
   step.value = review === 'SUBMITTED' || review === 'APPROVED' ? 3 : 2
@@ -538,6 +552,7 @@ const HEADS = { 1: ['car', 'bk.head1'], 2: ['camera', 'bk.head2'], 3: ['check', 
             <Icon name="receipt" :size="15" /> {{ t('bk.changes', { note: booking.review.note }) }}
           </p>
           <p class="lead">{{ t('bk.docsLead', { number: booking.number }) }}</p>
+          <button v-if="sentBody && v" type="button" class="back" @click="backToDetails">← {{ t('bk.editDetails') }}</button>
           <IdentityDocuments :number="booking.number" :documents="booking.documents" @updated="onDocs" />
         </div>
 
@@ -1044,6 +1059,19 @@ h3 i,
 .docs-step {
   display: grid;
   gap: 12px;
+}
+.docs-step .back {
+  justify-self: start;
+  min-height: 36px;
+  padding: 0 14px;
+  border: 1px solid var(--border, #d9dce3);
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
 }
 .docs-step .lead {
   color: #4b5060;

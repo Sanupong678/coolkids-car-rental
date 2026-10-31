@@ -2,7 +2,7 @@ import { pool, withTransaction } from "../../db/pool.js";
 import { BadRequest, NotFound } from "../../shared/errors.js";
 import { getSettings } from "../../shared/settings.js";
 import { recordAudit } from "../audit/audit.service.js";
-import { bookingDto, notify } from "../bookings/bookings.service.js";
+import { DRAFT_REPLACED, bookingDto, notify } from "../bookings/bookings.service.js";
 
 // Back-office dispatch board: today's jobs and the buttons that move a booking
 // through preparing documents → car on the way → arrived. Each step also writes
@@ -11,13 +11,19 @@ import { bookingDto, notify } from "../bookings/bookings.service.js";
 
 const TZ = "Asia/Bangkok";
 
+// A booking staff are still filling in (documents not done, not confirmed yet): kept off
+// the job lists in its own "ยังกรอกไม่เสร็จ" tab, where staff open it again to finish.
+const STAFF_DRAFT = "b.created_by_staff IS NOT NULL AND b.review_status IN ('DRAFT','CHANGES_REQUESTED')";
+
 export const BUCKETS = {
   today: "(b.pickup_at AT TIME ZONE 'Asia/Bangkok')::date = $1::date AND b.status NOT IN ('EXPIRED','PENDING')",
-  pending_payment: "b.status = 'PENDING' AND b.hold_expires_at > now()",
+  unfinished: `b.status = 'PENDING' AND b.hold_expires_at > now() AND ${STAFF_DRAFT}`,
+  pending_payment: `b.status = 'PENDING' AND b.hold_expires_at > now() AND NOT (${STAFF_DRAFT})`,
   to_deliver: "b.status IN ('CONFIRMED','PREPARING','READY')",
   in_delivery: "b.status = 'IN_DELIVERY'",
   delivered: "b.status IN ('ACTIVE','COMPLETED')",
-  cancelled: "b.status IN ('CANCELLED','REFUNDED','EXPIRED')",
+  // a draft dropped by "แก้ไขรายละเอียด" was replaced by a new booking, not cancelled by anyone
+  cancelled: `b.status IN ('CANCELLED','REFUNDED','EXPIRED') AND b.cancellation_reason IS DISTINCT FROM '${DRAFT_REPLACED}'`,
 };
 
 const LIST_SELECT = `

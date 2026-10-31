@@ -177,6 +177,7 @@ export async function createBooking(auth, input, ctx, opts = {}) {
       // "โอน = จอง": only the reservation fee is paid online, after staff approve the documents.
       money.dueNow = Math.min(Number(settings["booking.reservation_fee_minor"]), money.total);
       const userId = auth.user.id;
+      if (input.replaces) await dropDraft(db, input.replaces, opts.staff ? null : userId);
 
       // Serialise this customer's bookings, then cap how many unpaid holds they keep open.
       await db.query("SELECT pg_advisory_xact_lock(hashtext('booking-holds:' || $1))", [userId]);
@@ -304,6 +305,30 @@ export async function createBooking(auth, input, ctx, opts = {}) {
     { actorId: opts.staff?.user.id ?? auth.user.id },
   );
   return getBooking(opts.staff ?? auth, result);
+}
+
+/**
+ * "Back to details" from the documents step: the unfinished booking (still a draft,
+ * nothing paid) is cancelled in the same transaction, so its car hold is free for the
+ * corrected one. Customers may only drop their own; staff only bookings staff made.
+ * Photos already attached carry over when the ID and licence numbers stay the same.
+ */
+export const DRAFT_REPLACED = "แก้ไขรายละเอียด · จองใหม่แทน";
+async function dropDraft(db, number, ownerId) {
+  const { rows } = await db.query(
+    "SELECT id, user_id, status, review_status, created_by_staff FROM bookings WHERE booking_number = $1 AND deleted_at IS NULL FOR UPDATE",
+    [number],
+  );
+  const b = rows[0];
+  if (!b || (ownerId ? b.user_id !== ownerId : !b.created_by_staff)) throw NotFound("Booking");
+  if (b.status !== "PENDING" || !["DRAFT", "CHANGES_REQUESTED"].includes(b.review_status)) {
+    throw Conflict("BOOKING_NOT_DRAFT", "การจองนี้ส่งตรวจหรือยืนยันไปแล้ว แก้รายละเอียดจากตรงนี้ไม่ได้");
+  }
+  const why = DRAFT_REPLACED;
+  await db.query("UPDATE payments SET status = 'CANCELLED' WHERE booking_id = $1 AND status IN ('INITIATED','REQUIRES_ACTION')", [b.id]);
+  await db.query("SELECT set_config('app.status_reason', $1, true)", [why]);
+  await db.query("UPDATE bookings SET status = 'CANCELLED', cancellation_reason = $2 WHERE id = $1", [b.id, why]);
+  await db.query("SELECT set_config('app.status_reason', '', true)");
 }
 
 // ---------------------------------------------------------------- read

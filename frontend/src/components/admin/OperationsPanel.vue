@@ -9,6 +9,7 @@ import DocumentsDialog from '@/components/admin/ops/DocumentsDialog.vue'
 import MileageDialog from '@/components/admin/ops/MileageDialog.vue'
 import PaymentDialog from '@/components/admin/ops/PaymentDialog.vue'
 import LineClaimLink from '@/components/admin/LineClaimLink.vue'
+import BookingModal from '@/components/booking/BookingModal.vue'
 import { documentUrl } from '@/api/bookings'
 
 // Dispatch board. Staff press the buttons; the customer's tracker updates:
@@ -23,6 +24,7 @@ const BUCKETS = [
   ['in_delivery', 'กำลังส่ง'],
   ['delivered', 'ส่งแล้ว'],
   ['cancelled', 'ยกเลิก'],
+  ['unfinished', 'ยังกรอกไม่เสร็จ'],
   ['pending_payment', 'รอชำระเงิน'],
 ]
 const STATUS = {
@@ -49,7 +51,15 @@ const busyId = ref(null)
 const lineFor = ref(null)
 const LINE_CLOSED = ['CANCELLED', 'EXPIRED', 'REFUNDED']
 // a booking staff made whose customer cannot get LINE messages yet: show the link panel open
-const needsLineLink = (b) => b.bookedByStaff && !b.ops?.customerOnLine && !b.ops?.claimedAt && !LINE_CLOSED.includes(b.status)
+// a booking staff started but have not finished (documents, how the customer pays):
+// it sits in "ยังกรอกไม่เสร็จ" until staff open it again ("กรอกต่อ") and confirm it
+const unfinished = (b) => b.bookedByStaff && b.status === 'PENDING' && ['DRAFT', 'CHANGES_REQUESTED'].includes(b.review?.status)
+const editing = ref(null) // booking number open in the staff booking form
+function onEditClose() {
+  editing.value = null
+  load()
+}
+const needsLineLink = (b) => !unfinished(b) && b.bookedByStaff && !b.ops?.customerOnLine && !b.ops?.claimedAt && !LINE_CLOSED.includes(b.status)
 const error = ref('')
 let timer
 
@@ -118,8 +128,8 @@ async function act(b, status) {
 const DOC_LABEL = { id_front: 'บัตร (หน้า)', id_back: 'บัตร (หลัง)', license_front: 'ใบขับขี่' }
 // A PENDING booking waits on staff first (documents), then on the customer (reservation fee).
 const REVIEW_PILL = { SUBMITTED: ['รอตรวจเอกสาร', 'new'], CHANGES_REQUESTED: ['รอลูกค้าแก้เอกสาร', 'warn'] }
-const pill = (b) => (b.status === 'PENDING' && REVIEW_PILL[b.review?.status]) || STATUS[b.status]
-const awaitsReview = (b) => b.status === 'PENDING' && ['SUBMITTED', 'CHANGES_REQUESTED'].includes(b.review?.status)
+const pill = (b) => (unfinished(b) && ['กรอกยังไม่เสร็จ', 'warn']) || (b.status === 'PENDING' && REVIEW_PILL[b.review?.status]) || STATUS[b.status]
+const awaitsReview = (b) => !unfinished(b) && b.status === 'PENDING' && ['SUBMITTED', 'CHANGES_REQUESTED'].includes(b.review?.status)
 const dt = (iso) => new Date(iso).toLocaleString('th-TH', { timeZone: tz, day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })
 const time = (iso) => new Date(iso).toLocaleString('th-TH', { timeZone: tz, day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
 const clock = (iso) => new Date(iso).toLocaleTimeString('th-TH', { timeZone: tz, hour: '2-digit', minute: '2-digit' })
@@ -206,6 +216,9 @@ const onlineBalance = (b) =>
           </div>
         </div>
         <div class="act">
+          <button v-if="unfinished(b)" type="button" class="go" @click="editing = b.number">
+            <Icon name="receipt" :size="14" /> กรอกต่อ / แก้ไข
+          </button>
           <RouterLink v-if="awaitsReview(b)" :to="{ query: { tab: 'approvals', booking: b.number } }" class="go review">
             <Icon name="user" :size="14" /> ตรวจเอกสาร
           </RouterLink>
@@ -219,7 +232,7 @@ const onlineBalance = (b) =>
           >
             <Icon :name="ACTION[st][1]" :size="14" /> {{ ACTION[st][0] }}
           </button>
-          <button v-if="!LINE_CLOSED.includes(b.status) && !needsLineLink(b)" type="button" class="ghost" :aria-expanded="lineFor === b.number" @click="lineFor = lineFor === b.number ? null : b.number">
+          <button v-if="!LINE_CLOSED.includes(b.status) && !needsLineLink(b) && !unfinished(b)" type="button" class="ghost" :aria-expanded="lineFor === b.number" @click="lineFor = lineFor === b.number ? null : b.number">
             <Icon name="share" :size="14" /> ลิงก์ LINE
           </button>
           <span v-if="b.documents" class="docs">
@@ -247,6 +260,7 @@ const onlineBalance = (b) =>
     <PaymentDialog v-if="['pay', 'qr', 'ledger'].includes(tool?.kind)" :booking="tool.booking" :mode="{ pay: 'collect', qr: 'qr', ledger: 'ledger' }[tool.kind]" @close="onToolClose" />
     <MileageDialog v-if="tool?.kind === 'mileage'" :booking="tool.booking" @close="onToolClose" />
     <DocumentsDialog v-if="tool?.kind === 'contract'" :booking="tool.booking" @close="onToolClose" />
+    <BookingModal v-if="editing" :resume-number="editing" staff @close="onEditClose" />
     <div v-else-if="!error" class="skeleton" style="height: 240px" />
   </div>
 </template>

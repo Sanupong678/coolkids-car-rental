@@ -154,6 +154,7 @@ const S = {
     pdpa: ['ทางร้านรักษาข้อมูลลูกค้าตามกฎหมาย PDPA อย่างเคร่งครัด ไม่เปิดเผยข้อมูลแก่บุคคลภายนอก', 'We protect your data under Thailand’s PDPA and never share it with third parties.', '我们依照泰国《个人数据保护法》（PDPA）保护您的信息，绝不向第三方披露。'],
     changes: ['แอดมินขอแก้ไข: {note}', 'Please fix: {note}', '需要修改：{note}'],
     docsLead: ['การจอง {number} ล็อกรถไว้ให้แล้ว แนบรูปเอกสารแล้วกดส่งให้แอดมินตรวจสอบ', 'Booking {number} is holding the car for you. Attach the photos, then send them for review.', '预订 {number} 已为您保留车辆。请上传证件照片并提交审核。'],
+    editDetails: ['แก้ไขรายละเอียด', 'Edit details', '修改详细信息'],
     sentTitle: ['ส่งข้อมูลเรียบร้อย', 'All sent', '提交成功'],
     sentBody: ['แอดมินกำลังตรวจสอบเอกสารสักครู่ เมื่อผ่านแล้วเราจะแจ้งทาง LINE พร้อม QR สำหรับโอนค่าจอง {fee} (โอน = จอง)', 'Our team is checking your documents. Once approved we’ll send you a QR code on LINE to pay the {fee} reservation fee (paid = booked).', '工作人员正在审核您的证件。审核通过后，我们会通过 LINE 发送二维码，供您支付 {fee} 订金（付款即预订成功）。'],
     number: ['เลขที่การจอง', 'Booking number', '预订编号'],

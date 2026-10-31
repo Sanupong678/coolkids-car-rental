@@ -33,6 +33,8 @@ const bookingFields = z.object({
     termsLocale: z.enum(["th", "en", "zh"]).optional(),
     // Where to e-mail the contract (LINE sign-ins have no real e-mail).
     contactEmail: z.email().max(254).optional(),
+    // "back to details" from the documents step: this unfinished booking is dropped for the new one
+    replaces: z.string().regex(/^(COOL-\d{6}-\d{3,5}|BK-\d{4}-\d{6})$/).optional(),
     customer: z.object({
       fullName: z.string().trim().min(2).max(120),
       phone: z.string().trim().regex(/^\+?[0-9 ()-]{6,20}$/, "Invalid phone number"),
