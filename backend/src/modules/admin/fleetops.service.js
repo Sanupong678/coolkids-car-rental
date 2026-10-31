@@ -207,11 +207,13 @@ export async function sendContract(auth, bookingId, { via, email }, ctx) {
 
 // ---------------------------------------------------------------- booking timeline (cars × days)
 
+// Bar colour (owner 2026-10-31): rent still owed (only the reservation fee / deposit
+// paid) → orange; car delivered → grey; not delivered yet → blue.
 const PHASE = (r) => {
   if (r.status === "PENDING") return "pending"; // รออนุมัติ / รอชำระ
-  if (r.status === "ACTIVE") return "active"; // ใช้งาน
-  if (r.status === "COMPLETED") return r.deposit_held && !r.deposit_returned_at ? "deposit" : "done"; // รอคืนมัดจำ
-  return "handover"; // รอส่งมอบ
+  if (Number(r.rent_paid_minor) < Number(r.total_minor)) return "unpaid"; // ค้างค่าเช่า
+  if (r.status === "ACTIVE" || r.status === "COMPLETED") return "done"; // ส่งแล้ว
+  return "handover"; // รอส่งรถ
 };
 
 export async function schedule(from, to) {
@@ -225,7 +227,9 @@ export async function schedule(from, to) {
   const { rows } = await pool.query(
     `SELECT b.id, b.booking_number, b.vehicle_id, b.status, b.pickup_at, b.return_at, b.review_status, b.deposit_returned_at,
             ci.legal_full_name, u.full_name AS user_name,
-            EXISTS (SELECT 1 FROM payments p WHERE p.booking_id = b.id AND p.purpose = 'DEPOSIT' AND p.status = 'SUCCEEDED') AS deposit_held
+            b.total_minor,
+            (SELECT COALESCE(sum(p.amount_minor), 0) FROM payments p
+              WHERE p.booking_id = b.id AND p.purpose = 'RENTAL' AND p.status IN ('SUCCEEDED','PARTIALLY_REFUNDED','REFUNDED')) AS rent_paid_minor
        FROM bookings b
        JOIN users u ON u.id = b.user_id
        LEFT JOIN customer_identities ci ON ci.id = b.customer_identity_id

@@ -65,10 +65,9 @@ function place(start, end) {
 
 const PHASE = {
   pending: ['รออนุมัติ', 'pending'],
-  handover: ['รอส่งมอบ', 'handover'],
-  active: ['ใช้งาน', 'active'],
-  deposit: ['รอคืนมัดจำ', 'deposit'],
-  done: ['จบงาน', 'done'],
+  unpaid: ['ค้างค่าเช่า', 'unpaid'],
+  handover: ['รอส่งรถ', 'handover'],
+  done: ['ส่งแล้ว', 'done'],
 }
 const rows = computed(() =>
   (data.value?.cars ?? []).map((c) => ({
@@ -172,9 +171,9 @@ function closeStaff() {
 
     <footer class="legend">
       <span><i class="pending" /> รออนุมัติ</span>
-      <span><i class="handover" /> รอส่งมอบ</span>
-      <span><i class="active" /> ใช้งาน</span>
-      <span><i class="deposit" /> รอคืนมัดจำ</span>
+      <span><i class="handover" /> รอส่งรถ</span>
+      <span><i class="done" /> ส่งแล้ว</span>
+      <span><i class="unpaid" /> ค้างค่าเช่า (จ่ายแค่มัดจำ)</span>
       <span><i class="maint" /> ซ่อมบำรุง</span>
     </footer>
     <BookingModal v-if="staffCar" :vehicle="staffCar" staff @close="closeStaff" />
@@ -371,10 +370,7 @@ header p {
 .handover {
   background: #2fa8d8;
 }
-.active {
-  background: #8b6cf0;
-}
-.deposit {
+.unpaid {
   background: #f08a3c;
 }
 .done {
