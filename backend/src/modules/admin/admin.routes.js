@@ -157,6 +157,22 @@ export function adminRoutes() {
   router.get("/customers/:id", requirePermission(P.USERS_READ_SENSITIVE), validate({ params: idParam }), async (req, res) => {
     res.json({ data: await customers.customerDetail(req.auth, req.valid.params.id, auditContext(req)) });
   });
+  // their ID / licence photos (private: same headers as a booking's document photos)
+  router.get(
+    "/customers/:id/documents/:kind",
+    requirePermission(P.USERS_READ_SENSITIVE),
+    validate({ params: z.object({ id: z.uuid(), kind: z.enum(["id_front", "id_back", "license_front"]) }) }),
+    async (req, res) => {
+      const file = await customers.readCustomerDocument(req.valid.params.id, req.valid.params.kind);
+      res.set({
+        "Content-Type": file.contentType,
+        "Cache-Control": "private, no-store",
+        "Content-Security-Policy": "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; sandbox",
+        "Content-Disposition": "inline",
+      });
+      res.send(file.body);
+    },
+  );
   router.put(
     "/customers/:id",
     requirePermission(P.USERS_READ_SENSITIVE, P.BOOKINGS_WRITE),

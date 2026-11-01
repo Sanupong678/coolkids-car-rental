@@ -1,6 +1,6 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
-import { getCustomer, listCustomers, updateCustomer } from '@/api/admin'
+import { customerDocUrl, getCustomer, listCustomers, updateCustomer } from '@/api/admin'
 import { money } from '@/utils/format'
 import Icon from '@/components/ui/Icon.vue'
 import OpsDialog from '@/components/admin/ops/OpsDialog.vue'
@@ -43,6 +43,7 @@ async function show(r, mode) {
   try {
     const data = await getCustomer(r.id)
     open.value = { mode, data }
+    loadPhotos(data)
     form.value = { ...BLANK, ...(data.customer ?? { fullName: data.name, phone: data.phone ?? '' }) }
     formError.value = ''
   } catch (err) {
@@ -73,6 +74,29 @@ async function save() {
     busy.value = false
   }
 }
+// Photos are private: fetched with the staff session, shown from memory, dropped on close.
+const photos = ref({})
+function dropPhotos() {
+  for (const u of Object.values(photos.value)) URL.revokeObjectURL(u)
+  photos.value = {}
+}
+async function loadPhotos(data) {
+  dropPhotos()
+  for (const [k] of DOCS) {
+    if (!data.documents?.[k]) continue
+    try {
+      const res = await fetch(customerDocUrl(data.id, k), { credentials: 'include' })
+      if (res.ok) photos.value = { ...photos.value, [k]: URL.createObjectURL(await res.blob()) }
+    } catch {
+      /* the label still says it is on file */
+    }
+  }
+}
+function closeOpen() {
+  dropPhotos()
+  open.value = null
+}
+const DOCS = [['id_front', 'บัตรประชาชน / พาสปอร์ต'], ['license_front', 'ใบขับขี่'], ['id_back', 'บัตร (ด้านหลัง)']]
 const idLabel = (c) => (c?.idType === 'PASSPORT' ? 'พาสปอร์ต' : 'เลขบัตรประชาชน')
 </script>
 
@@ -87,7 +111,7 @@ const idLabel = (c) => (c?.idType === 'PASSPORT' ? 'พาสปอร์ต' : 
     <div v-if="rows" class="table-wrap">
       <table>
         <thead>
-          <tr><th>ชื่อลูกค้า</th><th>เบอร์โทร</th><th class="n">จองแล้ว (ครั้ง)</th><th>จองล่าสุด</th><th class="acts-h" /></tr>
+          <tr><th>ชื่อลูกค้า</th><th>เบอร์โทร</th><th class="n">จองแล้ว (ครั้ง)</th><th>เอกสาร</th><th>จองล่าสุด</th><th class="acts-h" /></tr>
         </thead>
         <tbody>
           <tr v-for="r in shown" :key="r.id">
@@ -101,19 +125,23 @@ const idLabel = (c) => (c?.idType === 'PASSPORT' ? 'พาสปอร์ต' : 
               <b>{{ r.bookings }}</b>
               <small v-if="r.cancelled" class="sub">ยกเลิก {{ r.cancelled }}</small>
             </td>
+            <td class="docs">
+              <span :class="r.docs.id ? 'ok' : 'no'"><Icon :name="r.docs.id ? 'check' : 'x'" :size="12" /> บัตร</span>
+              <span :class="r.docs.license ? 'ok' : 'no'"><Icon :name="r.docs.license ? 'check' : 'x'" :size="12" /> ใบขับขี่</span>
+            </td>
             <td>{{ day(r.lastBookedAt) }}</td>
             <td class="acts">
               <button type="button" class="ghost" :disabled="busy" @click="show(r, 'view')"><Icon name="eye" :size="14" /> ดูรายละเอียด</button>
               <button type="button" class="ghost" :disabled="busy" @click="show(r, 'edit')"><Icon name="receipt" :size="14" /> แก้ไข</button>
             </td>
           </tr>
-          <tr v-if="!shown.length"><td colspan="5" class="none">{{ rows.length ? 'ไม่พบรายชื่อที่ค้นหา' : 'ยังไม่มีลูกค้า' }}</td></tr>
+          <tr v-if="!shown.length"><td colspan="6" class="none">{{ rows.length ? 'ไม่พบรายชื่อที่ค้นหา' : 'ยังไม่มีลูกค้า' }}</td></tr>
         </tbody>
       </table>
     </div>
     <div v-else-if="!error" class="skeleton" style="height: 240px" />
 
-    <OpsDialog v-if="open" :title="open.mode === 'edit' ? `แก้ไขข้อมูล — ${open.data.name}` : open.data.name" icon="user" wide @close="open = null">
+    <OpsDialog v-if="open" :title="open.mode === 'edit' ? `แก้ไขข้อมูล — ${open.data.name}` : open.data.name" icon="user" wide @close="closeOpen">
       <template v-if="open.mode === 'view'">
         <div class="facts">
           <div><small>เบอร์โทร</small><b>{{ open.data.phone || '—' }}</b></div>
@@ -126,10 +154,21 @@ const idLabel = (c) => (c?.idType === 'PASSPORT' ? 'พาสปอร์ต' : 
           <div v-if="open.data.rental?.socialUrl"><small>Facebook / IG / LINE</small><b>{{ open.data.rental.socialUrl }}</b></div>
           <div v-if="open.data.rental?.stayLocation" class="wide"><small>ที่พักล่าสุด</small><b>{{ open.data.rental.stayLocation }}</b></div>
         </div>
+        <h4>เอกสาร</h4>
+        <div class="photos">
+          <template v-for="[k, label] in DOCS" :key="k">
+            <a v-if="open.data.documents?.[k]" :href="photos[k]" target="_blank" rel="noopener" class="photo">
+              <img v-if="photos[k]" :src="photos[k]" :alt="label" />
+              <span v-else class="loading-img" />
+              <span>{{ label }}</span>
+            </a>
+            <div v-else-if="k !== 'id_back'" class="photo none-doc"><Icon name="camera" :size="22" /><span>{{ label }} · ยังไม่มีรูป</span></div>
+          </template>
+        </div>
         <h4>ประวัติการจอง ({{ open.data.bookings.length }})</h4>
         <ul class="hist">
           <li v-for="b in open.data.bookings" :key="b.number">
-            <RouterLink :to="{ query: { tab: 'operations', booking: b.number } }" class="num" @click="open = null">{{ b.number }}</RouterLink>
+            <RouterLink :to="{ query: { tab: 'operations', booking: b.number } }" class="num" @click="closeOpen">{{ b.number }}</RouterLink>
             <span>{{ b.car }}</span>
             <span class="muted">{{ dt(b.pickupAt) }} – {{ dt(b.returnAt) }}</span>
             <span class="st">{{ STATUS[b.status] ?? b.status }}</span>
@@ -273,7 +312,60 @@ tbody tr:last-child td {
 .err {
   color: #ff8a82;
 }
+td.docs {
+  white-space: nowrap;
+}
+td.docs span {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-right: 6px;
+  padding: 2px 8px;
+  border: 1px solid var(--viz-border);
+  border-radius: 999px;
+  font-size: 0.75rem;
+}
+td.docs .ok {
+  border-color: rgb(95 211 154 / 0.5);
+  color: #8fe5b8;
+}
+td.docs .no {
+  color: var(--viz-muted);
+}
 /* inside the white popup */
+.photos {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 10px;
+}
+.photo {
+  display: grid;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid #e6e8ee;
+  border-radius: 12px;
+  color: #3a3d48;
+  font-size: 0.8rem;
+  text-align: center;
+}
+.photo img {
+  width: 100%;
+  aspect-ratio: 16 / 10;
+  object-fit: contain;
+  border-radius: 8px;
+  background: #f2f3f5;
+}
+.loading-img {
+  aspect-ratio: 16 / 10;
+  border-radius: 8px;
+  background: #eceef2;
+}
+.none-doc {
+  place-items: center;
+  min-height: 140px;
+  border-style: dashed;
+  color: #8d909b;
+}
 .facts {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));

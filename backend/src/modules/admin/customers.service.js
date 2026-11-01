@@ -1,5 +1,6 @@
 import { pool, withTransaction } from "../../db/pool.js";
 import { NotFound } from "../../shared/errors.js";
+import * as storage from "../../shared/storage.js";
 import { recordAudit } from "../audit/audit.service.js";
 import { DRAFT_REPLACED, writeIdentity } from "../bookings/bookings.service.js";
 import { bookingDefaults } from "../users/users.service.js";
@@ -20,7 +21,9 @@ export async function listCustomers() {
             count(b.id) FILTER (WHERE b.status IN ('CANCELLED','REFUNDED') AND b.cancellation_reason IS DISTINCT FROM $1)::int AS cancelled,
             max(b.pickup_at) AS last_pickup_at,
             max(b.created_at) AS last_booked_at,
-            EXISTS (SELECT 1 FROM user_identities i WHERE i.user_id = u.id AND i.provider = 'line') AS on_line
+            EXISTS (SELECT 1 FROM user_identities i WHERE i.user_id = u.id AND i.provider = 'line') AS on_line,
+            EXISTS (SELECT 1 FROM customer_identities x WHERE x.user_id = u.id AND x.id_front_media_id IS NOT NULL) AS has_id,
+            EXISTS (SELECT 1 FROM customer_identities x WHERE x.user_id = u.id AND x.license_front_media_id IS NOT NULL) AS has_license
        FROM users u
        JOIN bookings b ON b.user_id = u.id AND b.deleted_at IS NULL
        LEFT JOIN LATERAL (
@@ -41,6 +44,7 @@ export async function listCustomers() {
     phone: r.identity_phone ?? r.phone,
     email: realEmail(r.email),
     onLine: r.on_line,
+    docs: { id: r.has_id, license: r.has_license },
     bookings: r.bookings,
     completed: r.completed,
     cancelled: r.cancelled,
@@ -64,6 +68,7 @@ export async function customerDetail(staff, id, ctx) {
       [id, DRAFT_REPLACED],
     ),
   ]);
+  const documents = Object.fromEntries(await Promise.all(Object.keys(DOC_COLUMNS).map(async (k) => [k, Boolean(await documentMedia(id, k))])));
   await recordAudit(pool, ctx, { action: "customer.viewed", entityType: "user", entityId: id });
   return {
     id,
@@ -73,6 +78,7 @@ export async function customerDetail(staff, id, ctx) {
     since: u[0].created_at,
     customer: saved.customer,
     rental: saved.rental,
+    documents, // which ID / licence photos are on file (GET …/documents/:kind)
     bookings: bookings.map((b) => ({
       number: b.booking_number, status: b.status, pickupAt: b.pickup_at, returnAt: b.return_at,
       totalMinor: Number(b.total_minor), currency: b.currency, byStaff: b.by_staff,
@@ -101,4 +107,27 @@ export async function updateCustomer(staff, id, c, ctx) {
     { actorId: staff.user.id },
   );
   return customerDetail(staff, id, ctx);
+}
+
+// The customer's ID / licence photos: the newest identity version holding each one.
+const DOC_COLUMNS = { id_front: "id_front_media_id", id_back: "id_back_media_id", license_front: "license_front_media_id" };
+async function documentMedia(userId, kind) {
+  const col = DOC_COLUMNS[kind];
+  if (!col) return null;
+  const { rows } = await pool.query(
+    `SELECT ${col} AS media_id FROM customer_identities
+      WHERE user_id = $1 AND ${col} IS NOT NULL AND deleted_at IS NULL ORDER BY is_current DESC, created_at DESC LIMIT 1`,
+    [userId],
+  );
+  return rows[0]?.media_id ?? null;
+}
+
+export async function readCustomerDocument(userId, kind) {
+  const mediaId = await documentMedia(userId, kind);
+  if (!mediaId) throw NotFound("Document");
+  const { rows } = await pool.query("SELECT storage_provider, storage_key, mime_type FROM media WHERE id = $1 AND deleted_at IS NULL", [mediaId]);
+  if (!rows[0]) throw NotFound("Document");
+  const file = await storage.get("private", rows[0].storage_key, rows[0].storage_provider);
+  if (!file) throw NotFound("Document");
+  return { body: file.body, contentType: rows[0].mime_type };
 }
