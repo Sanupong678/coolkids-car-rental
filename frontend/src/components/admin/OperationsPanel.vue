@@ -1,12 +1,13 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { RouterLink, useRoute } from 'vue-router'
+import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { getOperations, setBookingStatus, undoBookingStatus } from '@/api/admin'
 import { currentPosition } from '@/utils/staffLocation'
 import { money } from '@/utils/format'
 import Icon from '@/components/ui/Icon.vue'
 import DocumentsDialog from '@/components/admin/ops/DocumentsDialog.vue'
 import MileageDialog from '@/components/admin/ops/MileageDialog.vue'
+import BookingOverview from '@/components/admin/ops/BookingOverview.vue'
 import PaymentDialog from '@/components/admin/ops/PaymentDialog.vue'
 import LineClaimLink from '@/components/admin/LineClaimLink.vue'
 import BookingModal from '@/components/booking/BookingModal.vue'
@@ -105,7 +106,17 @@ const onToolClose = () => {
 
 // ---- deep link from the timeline: find the booking's list and scroll to it
 const route = useRoute()
+const router = useRouter()
 const focus = ref(null)
+// detail popup (any tab); "คิวต่อไป" inside it opens that booking's own popup
+const overview = ref(null)
+function openNumber(number) {
+  const hit = Object.values(data.value?.lists ?? {}).flat().find((x) => x.number === number)
+  overview.value = null
+  if (hit) nextTick(() => (overview.value = hit))
+  else router.replace({ query: { ...route.query, booking: number } })
+}
+
 async function focusBooking(number) {
   if (!number || !data.value) return
   const hit = Object.entries(data.value.lists).find(([k, list]) => k !== 'today' && list.some((b) => b.number === number))
@@ -195,9 +206,9 @@ const onlineBalance = (b) =>
       <li v-for="b in rows" :id="`job-${b.number}`" :key="b.id" class="job" :class="{ focus: focus === b.number }">
         <div class="row">
           <div class="c-id">
-            <strong class="num">{{ b.number }}</strong>
+            <button type="button" class="num" title="ดูรายละเอียดการจองและคิวของรถคันนี้" @click="overview = b">{{ b.number }} <Icon name="chevron-right" :size="13" /></button>
             <small>{{ dt(b.createdAt) }}</small>
-            <img v-if="b.vehicle.image" :src="b.vehicle.image.variants?.w640 ?? b.vehicle.image.url" alt="" loading="lazy" />
+            <img v-if="b.vehicle.image" class="pic" title="ดูรายละเอียด" @click="overview = b" :src="b.vehicle.image.variants?.w640 ?? b.vehicle.image.url" alt="" loading="lazy" />
             <span class="pill" :class="pill(b)?.[1]">{{ pill(b)?.[0] ?? b.status }}</span>
             <span v-if="b.bookedByStaff" class="badge staff" title="แอดมินกรอกการจองนี้แทนลูกค้า"><Icon name="user" :size="12" /> แอดมินจองให้</span>
             <span v-if="b.ops?.customerOnLine" class="badge line" title="ลูกค้าได้รับแจ้งสถานะทาง LINE"><Icon name="check" :size="12" /> ลูกค้าติดตามใน LINE</span>
@@ -299,6 +310,7 @@ const onlineBalance = (b) =>
     <PaymentDialog v-if="['pay', 'qr', 'ledger'].includes(tool?.kind)" :booking="tool.booking" :mode="{ pay: 'collect', qr: 'qr', ledger: 'ledger' }[tool.kind]" @close="onToolClose" />
     <MileageDialog v-if="tool?.kind === 'mileage'" :booking="tool.booking" @close="onToolClose" />
     <DocumentsDialog v-if="tool?.kind === 'contract'" :booking="tool.booking" @close="onToolClose" />
+    <BookingOverview v-if="overview" :key="overview.id" :booking="overview" @close="overview = null" @open="openNumber" />
     <BookingModal v-if="editing" :resume-number="editing" staff @close="onEditClose" />
     <BookingModal v-if="changing" :vehicle="changing.vehicle" :edit-number="changing.number" staff @close="onEditClose" />
     <div v-else-if="!error" class="skeleton" style="height: 240px" />
@@ -323,8 +335,26 @@ const onlineBalance = (b) =>
   box-shadow: 0 0 0 2px rgb(226 54 44 / 0.35);
 }
 .c-id .num {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0;
+  border: 0;
+  background: none;
   color: #9cc4ff;
+  font: inherit;
+  font-weight: 700;
   letter-spacing: 0.02em;
+  text-align: left;
+  cursor: pointer;
+}
+.c-id .num:hover,
+.c-id .num:focus-visible {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.c-id .pic {
+  cursor: pointer;
 }
 .c-id small,
 .c-car small,

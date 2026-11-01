@@ -38,6 +38,7 @@ export const STATUS = {
   BOOKING_SUBMITTED: { ...S.info, label: "รอตรวจเอกสาร" },
   STAFF_NEW_BOOKING: { ...S.wait, badge: "staff", label: "รอตรวจเอกสาร" },
   STAFF_PAYMENT_RECEIVED: { ...S.ok, badge: "staff", label: "รับเงินแล้ว" },
+  STAFF_RETURN_DUE: { ...S.wait, badge: "staff", label: "ใกล้ถึงเวลาคืนรถ" },
   BOOKING_APPROVED: { ...S.ok, label: "อนุมัติแล้ว" },
   DOCS_CHANGES_REQUESTED: { ...S.wait, label: "ขอแก้ไขเอกสาร" },
   SLIP_NEEDS_REVIEW: { ...S.wait, badge: "slip", label: "กำลังตรวจสลิป" },

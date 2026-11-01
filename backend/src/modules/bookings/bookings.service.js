@@ -192,7 +192,7 @@ function priceFor(v, c, settings, pickupAt, returnAt, places) {
  * A new identity version (versioned and encrypted; the booking points at this exact one).
  * Same ID and licence numbers as the current one (or `carryFrom`) → the photos already sent carry over.
  */
-async function writeIdentity(db, userId, c, carryFrom = null) {
+export async function writeIdentity(db, userId, c, carryFrom = null) {
   const { rows: prev } = await db.query(
     `SELECT id_front_media_id, id_back_media_id, license_front_media_id FROM customer_identities
       WHERE user_id = $1 AND ${carryFrom ? "id = $5" : "is_current"} AND deleted_at IS NULL AND id_document_type = $2
@@ -1089,8 +1089,12 @@ async function customerAccount(email, c) {
  * to the customer's account so it shows up when they sign in with that e-mail.
  */
 export async function createStaffBooking(staff, input, ctx) {
-  const { customerEmail, ...booking } = input;
-  const customer = await customerAccount(customerEmail, booking.customer);
+  const { customerEmail, customerId, ...booking } = input;
+  // picked from the address book → that account; otherwise found / made by e-mail or phone
+  const customer = customerId
+    ? (await pool.query("SELECT id, email, full_name FROM users WHERE id = $1 AND deleted_at IS NULL", [customerId])).rows[0]
+    : await customerAccount(customerEmail, booking.customer);
+  if (!customer) throw NotFound("Customer");
   const asCustomer = { user: customer, roles: [], permissions: new Set() };
   return createBooking(asCustomer, { ...booking, contactEmail: booking.contactEmail ?? customerEmail }, ctx, { staff });
 }
@@ -1284,7 +1288,8 @@ export async function updateStaffBooking(staff, number, input, ctx) {
                 pricing_snapshot = $13, customer_notes = $14, customer_country = $15,
                 delivery_distance_m = $16, delivery_duration_s = $17, area_of_use = $18, stay_location = $19, social_url = $20,
                 rental_purpose = $21, contact_email = COALESCE($22, contact_email), return_type = $23, return_address = $24,
-                return_distance_m = $25, return_duration_s = $26
+                return_distance_m = $25, return_duration_s = $26,
+                return_reminded_at = CASE WHEN return_at = $6 THEN return_reminded_at END
           WHERE id = $1`,
         [
           b.id, identityId, input.fulfillment, places.deliveryAddress ? JSON.stringify(places.deliveryAddress) : null, pickup, returnAt,

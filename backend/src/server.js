@@ -5,6 +5,7 @@ import { logger } from "./shared/logger.js";
 import { backgroundRemovalAvailable } from "./shared/remove-bg.js";
 import { expireStaleHolds } from "./modules/bookings/bookings.service.js";
 import { sendPendingEmail } from "./modules/notifications/email.service.js";
+import { mailAdminsReturnsDue } from "./modules/bookings/admin-mail.js";
 import { sendPendingLine } from "./modules/notifications/line.service.js";
 
 const app = createApp();
@@ -41,6 +42,14 @@ const mailPush = setInterval(() => {
   sendPendingEmail().catch((err) => logger.error({ err }, "customer e-mail failed"));
 }, 60_000);
 mailPush.unref();
+
+// Staff e-mail 30 minutes before a car is due back.
+const returnsDue = setInterval(() => {
+  mailAdminsReturnsDue()
+    .then((n) => n && logger.info(`return reminder sent for ${n} booking(s)`))
+    .catch((err) => logger.error({ err }, "return reminder failed"));
+}, 60_000);
+returnsDue.unref();
 
 // Graceful shutdown: stop accepting connections, finish in-flight requests, close the pool.
 for (const signal of ["SIGINT", "SIGTERM"]) {

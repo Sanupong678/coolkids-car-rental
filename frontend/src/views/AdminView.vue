@@ -12,6 +12,7 @@ import ApprovalsPanel from '@/components/admin/ApprovalsPanel.vue'
 import ScheduleBoard from '@/components/admin/ScheduleBoard.vue'
 import MaintenancePanel from '@/components/admin/MaintenancePanel.vue'
 import AccountsPanel from '@/components/admin/AccountsPanel.vue'
+import CustomersPanel from '@/components/admin/CustomersPanel.vue'
 import TripSharing from '@/components/admin/TripSharing.vue'
 import { reportOnVisit } from '@/utils/staffLocation'
 
@@ -26,6 +27,7 @@ const TABS = [
   { key: 'dashboard', label: 'ภาพรวม', icon: 'grid', perm: 'analytics:read', comp: DashboardPanel },
   { key: 'schedule', label: 'ปฏิทินจอง', icon: 'calendar', perm: 'bookings:read', comp: ScheduleBoard },
   { key: 'operations', label: 'งานส่งรถ', icon: 'car', perm: 'bookings:read', comp: OperationsPanel },
+  { key: 'customers', label: 'สมุดรายชื่อ', icon: 'users', perm: 'users:read_sensitive', comp: CustomersPanel },
   { key: 'approvals', label: 'ตรวจเอกสาร', icon: 'user', perm: 'users:read_sensitive', comp: ApprovalsPanel },
   { key: 'slips', label: 'ตรวจสลิป', icon: 'check', perm: 'payments:read', comp: SlipsPanel },
   { key: 'maintenance', label: 'ซ่อมบำรุง', icon: 'gauge', perm: 'maintenance:read', comp: MaintenancePanel },
@@ -443,16 +445,17 @@ body.admin-page {
 /* Back-office form controls follow the glass theme (they live in several panels).
    Not inside the booking form (.bk, opened by "จองให้ลูกค้า"): it keeps the site's light
    theme, where light text on its white fields was unreadable. */
-.admin input:not([type='checkbox']):not([type='radio']):not([type='file']):not(.bk *),
-.admin select:not(.bk *),
-.admin textarea:not(.bk *) {
+/* not inside the white popups (booking form .bk, board tools .od): those keep dark text */
+.admin input:not([type='checkbox']):not([type='radio']):not([type='file']):not(.bk *):not(.od *),
+.admin select:not(.bk *):not(.od *),
+.admin textarea:not(.bk *):not(.od *) {
   color: var(--viz-text);
 }
-.admin select:not(.bk *) option {
+.admin select:not(.bk *):not(.od *) option {
   background: #161b2e;
   color: var(--viz-text);
 }
-.admin input[type='date']:not(.bk *)::-webkit-calendar-picker-indicator {
+.admin input[type='date']:not(.bk *):not(.od *)::-webkit-calendar-picker-indicator {
   filter: invert(1) opacity(0.7);
 }
 </style>

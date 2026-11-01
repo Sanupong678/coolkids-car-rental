@@ -210,3 +210,51 @@ export async function mailAdminsBookingSubmitted(number) {
     logger.error({ err, number }, "admin booking e-mail failed");
   }
 }
+
+/**
+ * Staff e-mail 30 minutes before a car is due back (owner 2026-11-01): who has it, when
+ * and where to collect it. Each booking is claimed once (return_reminded_at), so several
+ * API processes or a restart never send it twice; a new return time clears the mark.
+ */
+export async function mailAdminsReturnsDue() {
+  if (!config.mailConfigured || config.isTest) return 0;
+  const { rows: due } = await pool.query(
+    `UPDATE bookings SET return_reminded_at = now()
+      WHERE status = 'ACTIVE' AND return_reminded_at IS NULL AND deleted_at IS NULL
+        AND return_at <= now() + interval '30 minutes' AND return_at > now() - interval '15 minutes'
+      RETURNING id`,
+  );
+  if (!due.length) return 0;
+  const to = await staffRecipients();
+  if (!to.length) return 0;
+  for (const { id } of due) {
+    try {
+      const { rows } = await pool.query(`${BOOKING_SELECT} WHERE b.id = $1`, [id]);
+      const b = rows[0];
+      if (!b) continue;
+      const place = b.return_address?.address ?? (b.return_type === "SAME_AS_DELIVERY" ? b.delivery_address?.address : null) ?? `สาขา ${b.branch_name ?? ""}`.trim();
+      const link = `${config.FRONTEND_URL}/admin?tab=operations&booking=${b.booking_number}`;
+      const subject = `[Coolkids] อีก 30 นาทีถึงเวลารับรถคืน · ${b.booking_number} · ${[b.brand, b.model, b.license_plate].filter(Boolean).join(" ")}`;
+      const rowsOut = [
+        ["flag", "คืนรถ", when(b.return_at)],
+        ["pin", "รับรถคืนที่", place],
+        ["user", "ลูกค้า", `${b.legal_full_name ?? "—"} · ${b.customer_phone ?? ""}`],
+        ["car", "รถ", [b.brand, b.model, b.license_plate].filter(Boolean).join(" ")],
+      ];
+      const text = [`อีก 30 นาทีถึงเวลารับรถคืน: ${b.booking_number}`, "", ...rowsOut.map(([, k, v]) => `${k}: ${v}`), "", `เปิดในหลังบ้าน: ${link}`].join("\n");
+      const html = layout({
+        type: "STAFF_RETURN_DUE",
+        title: "อีก 30 นาทีถึงเวลารับรถคืน",
+        lead: `${b.legal_full_name ?? "ลูกค้า"} คืนรถ ${when(b.return_at)} ที่ ${place}`,
+        booking: b,
+        staff: true,
+        sections: [infoRows(rowsOut)],
+        cta: { label: "เปิดการจองในหลังบ้าน", href: link },
+      });
+      for (const addr of to) await sendMail({ to: addr, subject, text, html });
+    } catch (err) {
+      logger.error({ err, bookingId: id }, "return reminder e-mail failed");
+    }
+  }
+  return due.length;
+}

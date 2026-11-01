@@ -17,6 +17,20 @@ export const deliveryInput = z
 // Document numbers: letters (any script) and digits, with the usual separators.
 const DOC_NO = /^[\p{L}\p{N} ./-]+$/u;
 
+/** The renter's details (booking forms, and staff editing a customer in the address book). */
+export const customerFields = z.object({
+  fullName: z.string().trim().min(2).max(120),
+  phone: z.string().trim().regex(/^\+?[0-9 ()-]{6,20}$/, "Invalid phone number"),
+  countryCode: country,
+  idType: z.enum(["NATIONAL_ID", "PASSPORT"]),
+  idNumber: z.string().trim().min(5).max(30).regex(DOC_NO, "เลขบัตร / พาสปอร์ต ใส่ได้เฉพาะตัวอักษรและตัวเลข"),
+  dateOfBirth: isoDate,
+  licenseNumber: z.string().trim().min(4).max(30).regex(DOC_NO, "เลขใบขับขี่ ใส่ได้เฉพาะตัวอักษรและตัวเลข"),
+  licenseCountry: country,
+  licenseExpiry: isoDate,
+  address: z.string().trim().min(5).max(300),
+});
+
 const bookingFields = z.object({
     vehicleSlug: z.string().regex(/^[a-z0-9-]+$/).max(120),
     pickupAt: z.iso.datetime({ offset: true }),
@@ -39,18 +53,7 @@ const bookingFields = z.object({
     contactEmail: z.email().max(254).optional(),
     // "back to details" from the documents step: this unfinished booking is dropped for the new one
     replaces: z.string().regex(/^(COOL-\d{6}-\d{3,5}|BK-\d{4}-\d{6})$/).optional(),
-    customer: z.object({
-      fullName: z.string().trim().min(2).max(120),
-      phone: z.string().trim().regex(/^\+?[0-9 ()-]{6,20}$/, "Invalid phone number"),
-      countryCode: country,
-      idType: z.enum(["NATIONAL_ID", "PASSPORT"]),
-      idNumber: z.string().trim().min(5).max(30).regex(DOC_NO, "เลขบัตร / พาสปอร์ต ใส่ได้เฉพาะตัวอักษรและตัวเลข"),
-      dateOfBirth: isoDate,
-      licenseNumber: z.string().trim().min(4).max(30).regex(DOC_NO, "เลขใบขับขี่ ใส่ได้เฉพาะตัวอักษรและตัวเลข"),
-      licenseCountry: country,
-      licenseExpiry: isoDate,
-      address: z.string().trim().min(5).max(300),
-    }),
+    customer: customerFields,
     // Both must be "yes" for insurance to apply (contract page 1).
     declarations: z.object({ hasOriginalLicense: z.literal(true), infoMatchesLicense: z.literal(true) }),
 });
@@ -72,7 +75,10 @@ export const createBookingSchema = bookingRules(bookingFields);
 
 // Staff booking on a customer's behalf (back office): the customer's e-mail finds or
 // makes their account; without one the booking goes on an account keyed by their phone.
-export const staffBookingSchema = bookingRules(bookingFields.extend({ customerEmail: z.email().max(254).optional() }));
+export const staffBookingSchema = bookingRules(bookingFields.extend({
+  customerEmail: z.email().max(254).optional(),
+  customerId: z.uuid().optional(), // picked from the address book: the booking goes on that account
+}));
 
 // Staff confirm a booking paid outside the system (cash / transfer): no online payment step.
 // Staff set a booking's prices by hand (satang); a missing field keeps its amount.

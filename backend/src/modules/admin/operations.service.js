@@ -2,7 +2,8 @@ import { pool, withTransaction } from "../../db/pool.js";
 import { BadRequest, NotFound } from "../../shared/errors.js";
 import { getSettings } from "../../shared/settings.js";
 import { recordAudit } from "../audit/audit.service.js";
-import { DRAFT_REPLACED, bookingDto, notify } from "../bookings/bookings.service.js";
+import { DRAFT_REPLACED, bookingDto, getBooking, notify } from "../bookings/bookings.service.js";
+import { reminders } from "./fleetops.service.js";
 
 // Back-office dispatch board: today's jobs and the buttons that move a booking
 // through preparing documents → car on the way → arrived. Each step also writes
@@ -269,3 +270,61 @@ export async function undoStatus(auth, bookingId, ctx) {
   );
 }
 
+
+/**
+ * Everything about one booking at a glance (the board's detail popup): its status
+ * history with who moved it, when the car must be collected, and what this car has
+ * coming next — the following renters and any service or document falling due.
+ */
+export async function bookingOverview(auth, bookingId) {
+  const { rows } = await pool.query("SELECT booking_number, vehicle_id, return_at FROM bookings WHERE id = $1 AND deleted_at IS NULL", [bookingId]);
+  if (!rows[0]) throw NotFound("Booking");
+  const b = rows[0];
+  const [booking, { rows: history }, { rows: next }, { rows: maint }, fleet] = await Promise.all([
+    getBooking(auth, b.booking_number),
+    pool.query(
+      `SELECT h.from_status, h.to_status, h.changed_at, h.reason, u.full_name AS by_name
+         FROM booking_status_history h LEFT JOIN users u ON u.id = h.changed_by
+        WHERE h.booking_id = $1 ORDER BY h.changed_at, h.id`,
+      [bookingId],
+    ),
+    pool.query(
+      `SELECT b.booking_number, b.status, b.pickup_at, b.return_at, b.fulfillment_type,
+              COALESCE(ci.legal_full_name, u.full_name) AS customer, ci.phone
+         FROM bookings b JOIN users u ON u.id = b.user_id
+         LEFT JOIN customer_identities ci ON ci.id = b.customer_identity_id
+        WHERE b.vehicle_id = $1 AND b.id <> $2 AND b.deleted_at IS NULL
+          AND b.status IN ('PENDING','CONFIRMED','PREPARING','READY','IN_DELIVERY','ACTIVE')
+          AND (b.status <> 'PENDING' OR b.hold_expires_at > now())
+          AND b.return_at > now()
+        ORDER BY b.pickup_at LIMIT 5`,
+      [b.vehicle_id, bookingId],
+    ),
+    pool.query(
+      `SELECT lower(during) AS start_at, upper(during) AS end_at, reason
+         FROM vehicle_availability_blocks
+        WHERE vehicle_id = $1 AND block_type = 'MAINTENANCE' AND released_at IS NULL AND upper(during) > now()
+        ORDER BY lower(during) LIMIT 5`,
+      [b.vehicle_id],
+    ),
+    reminders(),
+  ]);
+  const car = fleet.cars.find((c) => c.id === b.vehicle_id);
+  return {
+    booking,
+    history: history.map((h) => ({ from: h.from_status, to: h.to_status, at: h.changed_at, by: h.by_name, reason: h.reason })),
+    car: {
+      currentKm: car?.currentKm ?? null,
+      // the next renters of this car (after or around this booking)
+      next: next.map((n) => ({
+        number: n.booking_number, status: n.status, pickupAt: n.pickup_at, returnAt: n.return_at,
+        fulfillment: n.fulfillment_type, customer: n.customer, phone: n.phone,
+      })),
+      maintenance: maint.map((m) => ({ start: m.start_at, end: m.end_at, reason: m.reason })),
+      // service and documents due soon or overdue
+      due: [...(car?.plans ?? []), ...(car?.docs ?? [])]
+        .filter((i) => i.level !== "ok")
+        .map((i) => ({ label: i.label, level: i.level, daysLeft: i.daysLeft, kmLeft: i.kmLeft ?? null, nextAt: i.nextAt ?? i.expiresOn ?? null })),
+    },
+  };
+}

@@ -1,7 +1,7 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { createBooking, getBooking, getBookingDefaults, submitForReview } from '@/api/bookings'
-import { adjustPrice, bookingForm, confirmOffline, requestPayment, staffCreateBooking, updateBooking } from '@/api/admin'
+import { adjustPrice, bookingForm, confirmOffline, getCustomer, listCustomers, requestPayment, staffCreateBooking, updateBooking } from '@/api/admin'
 import { useAuthStore } from '@/stores/auth'
 import { money, toLocalInput } from '@/utils/format'
 import { useI18n } from '@/i18n'
@@ -79,6 +79,41 @@ const decl = ref({ hasOriginalLicense: false, infoMatchesLicense: false })
 const realEmail = (e) => (e && !/@(line\.coolkids\.invalid|coolkids\.local)$/i.test(e) ? e : '')
 const use = ref({ areaOfUse: t('bk.areaDefault'), stayLocation: '', socialUrl: '', rentalPurpose: 'TRAVEL', contactEmail: props.staff ? '' : realEmail(auth.me?.email) })
 const customerEmail = ref('') // staff mode: finds / makes the customer's account
+
+// Staff: pick the renter from the address book ("สมุดรายชื่อ"); their saved details fill the form
+// and the booking goes on their account.
+const book = ref(null) // everyone who has booked (loaded on first focus)
+const bookQ = ref('')
+const picked = ref(null) // { id, name, phone }
+async function loadBook() {
+  if (book.value || !props.staff) return
+  try {
+    book.value = await listCustomers()
+  } catch {
+    book.value = []
+  }
+}
+const squash = (x) => String(x ?? '').toLowerCase().replace(/[\s-]/g, '')
+const bookHits = computed(() => {
+  const k = squash(bookQ.value)
+  if (!k || !book.value) return []
+  return book.value.filter((r) => squash(r.name).includes(k) || squash(r.phone).includes(k) || squash(r.email).includes(k)).slice(0, 8)
+})
+async function pick(r) {
+  bookQ.value = ''
+  try {
+    const d = await getCustomer(r.id)
+    picked.value = { id: d.id, name: d.name, phone: d.phone }
+    const fill = (target, source) => {
+      for (const [k, val] of Object.entries(source ?? {})) if (val != null && val !== '') target.value[k] = val
+    }
+    fill(c, d.customer ?? { fullName: d.name, phone: d.phone })
+    fill(use, d.rental)
+    customerEmail.value = d.email ?? ''
+  } catch (err) {
+    error.value = explain(err)
+  }
+}
 
 // Where the car goes back: the branch, the delivery address, or another address (priced by distance).
 const returnType = ref('BRANCH')
@@ -240,7 +275,9 @@ function detailsBody() {
       contactEmail: use.value.contactEmail.trim() || undefined,
       customer: { ...c.value, fullName: c.value.fullName.trim(), phone: c.value.phone.trim(), idNumber: c.value.idNumber.trim(), licenseNumber: c.value.licenseNumber.trim() },
       declarations: { hasOriginalLicense: true, infoMatchesLicense: true },
-      ...(props.staff && !props.editNumber ? { customerEmail: customerEmail.value.trim() || undefined } : {}),
+      ...(props.staff && !props.editNumber
+        ? { customerEmail: customerEmail.value.trim() || undefined, customerId: picked.value?.id }
+        : {}),
   }
 }
 
@@ -582,7 +619,22 @@ const HEADS = { 1: ['car', props.editNumber ? 'bk.headEdit' : 'bk.head1'], 2: ['
 
           <section v-if="staff" class="staff-box">
             <h3>{{ t('bk.staffCustomer') }}</h3>
-            <label class="f"><span>{{ t('bk.staffEmail') }} <small>({{ t('common.optional') }})</small></span><input v-model="customerEmail" type="email" maxlength="254" autocomplete="off" placeholder="customer@gmail.com" /></label>
+            <div v-if="!editNumber" class="book">
+              <p v-if="picked" class="picked">
+                <Icon name="check" :size="15" /> {{ t('bk.bookPicked', { name: picked.name, phone: picked.phone ?? '' }) }}
+                <button type="button" @click="picked = null">{{ t('bk.bookChange') }}</button>
+              </p>
+              <label v-else class="f">
+                <span>{{ t('bk.bookPick') }}</span>
+                <input v-model="bookQ" type="search" autocomplete="off" :placeholder="t('bk.bookPh')" @focus="loadBook" />
+              </label>
+              <ul v-if="bookHits.length && !picked" class="hits">
+                <li v-for="r in bookHits" :key="r.id">
+                  <button type="button" @click="pick(r)"><b>{{ r.name }}</b><small>{{ r.phone ?? '' }} · {{ t('bk.bookTimes', { n: r.bookings }) }}</small></button>
+                </li>
+              </ul>
+            </div>
+            <label v-if="!picked" class="f"><span>{{ t('bk.staffEmail') }} <small>({{ t('common.optional') }})</small></span><input v-model="customerEmail" type="email" maxlength="254" autocomplete="off" placeholder="customer@gmail.com" /></label>
             <small class="hint">{{ t('bk.staffEmailHint') }}</small>
           </section>
 
@@ -1497,6 +1549,66 @@ h3 i,
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
 }
 /* back office: who the booking is for, and what they already paid */
+.book {
+  position: relative;
+  display: grid;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.hits {
+  display: grid;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  border: 1px solid #e3e5ea;
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.08);
+}
+.hits button {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 4px 12px;
+  width: 100%;
+  padding: 10px 12px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.hits button:hover,
+.hits button:focus-visible {
+  background: #fff1f0;
+}
+.hits small {
+  color: #6b6e7a;
+}
+.picked {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: #e8f7ee;
+  color: #1f6b46;
+  font-weight: 600;
+}
+.picked button {
+  margin-left: auto;
+  padding: 4px 12px;
+  border: 1px solid #1f6b46;
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
 .staff-box {
   padding: 12px 14px;
   border: 1px dashed #e2362c;

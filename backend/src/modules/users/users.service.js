@@ -116,7 +116,7 @@ const decrypt = (buf) => {
  * filled in. Full ID / licence numbers go to the signed-in owner only (never cached);
  * a licence that has expired is left out so it gets re-entered.
  */
-export async function bookingDefaults(userId) {
+export async function bookingDefaults(userId, { includeStaff = false } = {}) {
   const [{ rows: ci }, { rows: b }] = await Promise.all([
     pool.query(
       `SELECT legal_full_name, date_of_birth, country_code, id_document_type, id_document_number_enc,
@@ -127,9 +127,9 @@ export async function bookingDefaults(userId) {
     ),
     pool.query(
       `SELECT area_of_use, stay_location, social_url, rental_purpose, contact_email
-         FROM bookings WHERE user_id = $1 AND deleted_at IS NULL AND created_by_staff IS NULL
+         FROM bookings WHERE user_id = $1 AND deleted_at IS NULL AND ($2 OR created_by_staff IS NULL)
         ORDER BY created_at DESC LIMIT 1`,
-      [userId],
+      [userId, includeStaff],
     ),
   ]);
   const i = ci[0];

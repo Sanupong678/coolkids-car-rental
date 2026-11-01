@@ -27,7 +27,7 @@ describe("super admin manages sub-admin accounts", () => {
   test("the super admin sees every page plus account management; a normal admin cannot manage accounts", async () => {
     const me = (await boss.get("/api/v1/me").expect(200)).body.data;
     assert.ok(me.roles.includes("super_admin"));
-    assert.deepEqual(me.adminPages, ["dashboard", "schedule", "operations", "approvals", "slips", "maintenance", "fleet", "data", "admins"]);
+    assert.deepEqual(me.adminPages, ["dashboard", "schedule", "operations", "customers", "approvals", "slips", "maintenance", "fleet", "data", "admins"]);
     const adminMe = (await admin.get("/api/v1/me").expect(200)).body.data;
     assert.ok(!adminMe.adminPages.includes("admins"));
     await admin.get("/api/v1/admin/accounts").expect(403);

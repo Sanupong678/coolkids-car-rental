@@ -91,3 +91,10 @@ export const requestPayment = (number, body = {}) => postJson(`/admin/bookings/$
 export const bookingForm = (number) => api(`/admin/bookings/${number}/form`).then((r) => r.data)
 export const updateBooking = (number, body) => api(`/admin/bookings/${number}`, { method: 'PUT', body }).then((r) => r.data)
 export const adjustPrice = (number, body) => postJson(`/admin/bookings/${number}/price`, body)
+
+// Address book ("สมุดรายชื่อ"): everyone who has booked; detail has the saved details for the booking form.
+export const listCustomers = () => api('/admin/customers').then((r) => r.data)
+export const getCustomer = (id) => api(`/admin/customers/${id}`).then((r) => r.data)
+export const updateCustomer = (id, body) => api(`/admin/customers/${id}`, { method: 'PUT', body }).then((r) => r.data)
+// Board detail popup: status history, collection time, this car's next renters and service due.
+export const bookingOverview = (id) => api(`/admin/bookings/${id}/overview`).then((r) => r.data)

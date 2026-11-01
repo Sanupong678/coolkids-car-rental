@@ -14,6 +14,7 @@ export const ADMIN_PAGES = {
       P.PAYMENTS_READ, P.PAYMENTS_REFUND, P.CONTRACTS_READ, P.USERS_READ_SENSITIVE,
     ],
   },
+  customers: { label: "สมุดรายชื่อ", permissions: [P.USERS_READ_SENSITIVE, P.BOOKINGS_READ, P.BOOKINGS_WRITE] },
   approvals: { label: "ตรวจเอกสาร", permissions: [P.BOOKINGS_READ, P.BOOKINGS_WRITE, P.USERS_READ_SENSITIVE] },
   slips: { label: "ตรวจสลิป", permissions: [P.PAYMENTS_READ, P.BOOKINGS_WRITE] },
   maintenance: { label: "ซ่อมบำรุง", permissions: [P.MAINTENANCE_READ, P.MAINTENANCE_WRITE, P.VEHICLES_READ] },

@@ -17,10 +17,11 @@ import * as slips from "../payments/slips.service.js";
 import * as review from "./review.service.js";
 import * as fleetops from "./fleetops.service.js";
 import * as accounts from "./accounts.service.js";
+import * as customers from "./customers.service.js";
 import * as staffEmail from "../notifications/staff-recipients.js";
 import * as documents from "../bookings/documents.service.js";
 import * as bookings from "../bookings/bookings.service.js";
-import { createBookingSchema, numberParam, offlineConfirmSchema, priceAdjustSchema, staffBookingSchema } from "../bookings/bookings.schemas.js";
+import { createBookingSchema, customerFields, numberParam, offlineConfirmSchema, priceAdjustSchema, staffBookingSchema } from "../bookings/bookings.schemas.js";
 import { PAGE_KEYS } from "../rbac/pages.js";
 import * as vehicles from "./vehicles.service.js";
 
@@ -144,6 +145,27 @@ export function adminRoutes() {
       res.json({ data });
     },
   );
+  // Booking detail popup on the board: status history, collection time, the car's next renters / service.
+  router.get("/bookings/:id/overview", requirePermission(P.BOOKINGS_READ), validate({ params: idParam }), async (req, res) => {
+    res.json({ data: await operations.bookingOverview(req.auth, req.valid.params.id) });
+  });
+
+  // ---- address book ("สมุดรายชื่อ"): everyone who has booked; picked from the staff booking form
+  router.get("/customers", requireAnyPermission(P.USERS_READ_SENSITIVE, P.BOOKINGS_WRITE), async (req, res) => {
+    res.json({ data: await customers.listCustomers() });
+  });
+  router.get("/customers/:id", requirePermission(P.USERS_READ_SENSITIVE), validate({ params: idParam }), async (req, res) => {
+    res.json({ data: await customers.customerDetail(req.auth, req.valid.params.id, auditContext(req)) });
+  });
+  router.put(
+    "/customers/:id",
+    requirePermission(P.USERS_READ_SENSITIVE, P.BOOKINGS_WRITE),
+    validate({ params: idParam, body: customerFields }),
+    async (req, res) => {
+      res.json({ data: await customers.updateCustomer(req.auth, req.valid.params.id, req.valid.body, auditContext(req)) });
+    },
+  );
+
   // "ย้อนสถานะ": back one step (a button pressed by mistake)
   router.post(
     "/bookings/:id/status/undo",
