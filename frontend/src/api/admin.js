@@ -8,6 +8,8 @@ export const getOperations = (date) => api(`/admin/operations${date ? `?date=${d
 // `location` (optional) is the acting staff member's position at that moment.
 export const setBookingStatus = (id, status, reason, location) =>
   api(`/admin/bookings/${id}/status`, { method: 'POST', body: { status, reason, location: location ?? undefined } }).then((r) => r.data)
+// "ย้อนสถานะ": one step back (a button pressed by mistake)
+export const undoBookingStatus = (id) => api(`/admin/bookings/${id}/status/undo`, { method: 'POST', body: {} }).then((r) => r.data)
 export const listDatasets = () => api('/admin/exports').then((r) => r.data)
 export const exportUrl = (name, from, to, ext = 'csv') => `${BASE}/admin/exports/${name}.${ext}?from=${from}&to=${to}`
 

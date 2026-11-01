@@ -1,7 +1,7 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
-import { getOperations, setBookingStatus } from '@/api/admin'
+import { getOperations, setBookingStatus, undoBookingStatus } from '@/api/admin'
 import { currentPosition } from '@/utils/staffLocation'
 import { money } from '@/utils/format'
 import Icon from '@/components/ui/Icon.vue'
@@ -140,6 +140,21 @@ async function act(b, status) {
   }
 }
 
+// "ย้อนสถานะ": back to the status before (a button pressed by mistake)
+const UNDOABLE = ['PREPARING', 'READY', 'IN_DELIVERY', 'ACTIVE', 'COMPLETED']
+async function undo(b) {
+  if (!window.confirm(`ย้อนสถานะการจอง ${b.number} จาก "${pill(b)?.[0] ?? b.status}" กลับไปขั้นก่อนหน้า?`)) return
+  busyId.value = b.id
+  try {
+    await undoBookingStatus(b.id)
+    await load()
+  } catch (err) {
+    error.value = err.message
+  } finally {
+    busyId.value = null
+  }
+}
+
 const DOC_LABEL = { id_front: 'บัตร (หน้า)', id_back: 'บัตร (หลัง)', license_front: 'ใบขับขี่' }
 // A PENDING booking waits on staff first (documents), then on the customer (reservation fee).
 const REVIEW_PILL = { SUBMITTED: ['รอตรวจเอกสาร', 'new'], CHANGES_REQUESTED: ['รอลูกค้าแก้เอกสาร', 'warn'] }
@@ -231,25 +246,31 @@ const onlineBalance = (b) =>
           </div>
         </div>
         <div class="act">
+          <button
+            v-for="st in actionsFor(b).filter((x) => x !== 'CANCELLED')"
+            :key="st"
+            type="button"
+            class="go"
+            :disabled="busyId === b.id"
+            @click="act(b, st)"
+          >
+            <Icon :name="ACTION[st][1]" :size="14" /> {{ ACTION[st][0] }}
+          </button>
           <button v-if="unfinished(b)" type="button" class="go" @click="editing = b.number">
             <Icon name="receipt" :size="14" /> กรอกต่อ / แก้ไข
           </button>
           <button v-if="EDITABLE.includes(b.status) && !unfinished(b)" type="button" class="ghost" :disabled="busyId === b.id" @click="openEdit(b)">
             <Icon name="receipt" :size="14" /> แก้ไขรายละเอียด
           </button>
+          <button v-if="UNDOABLE.includes(b.status)" type="button" class="ghost" :disabled="busyId === b.id" title="ย้อนกลับไปสถานะก่อนหน้า" @click="undo(b)">
+            <Icon name="arrow-left" :size="14" /> ย้อนสถานะ
+          </button>
+          <button v-if="actionsFor(b).includes('CANCELLED')" type="button" class="ghost" :disabled="busyId === b.id" @click="act(b, 'CANCELLED')">
+            <Icon :name="ACTION.CANCELLED[1]" :size="14" /> {{ ACTION.CANCELLED[0] }}
+          </button>
           <RouterLink v-if="awaitsReview(b)" :to="{ query: { tab: 'approvals', booking: b.number } }" class="go review">
             <Icon name="user" :size="14" /> ตรวจเอกสาร
           </RouterLink>
-          <button
-            v-for="st in actionsFor(b)"
-            :key="st"
-            type="button"
-            :class="st === 'CANCELLED' ? 'ghost' : 'go'"
-            :disabled="busyId === b.id"
-            @click="act(b, st)"
-          >
-            <Icon :name="ACTION[st][1]" :size="14" /> {{ ACTION[st][0] }}
-          </button>
           <button v-if="!LINE_CLOSED.includes(b.status) && !needsLineLink(b) && !unfinished(b)" type="button" class="ghost" :aria-expanded="lineFor === b.number" @click="lineFor = lineFor === b.number ? null : b.number">
             <Icon name="share" :size="14" /> ลิงก์ LINE
           </button>

@@ -207,3 +207,65 @@ export async function changeStatus(auth, bookingId, { status, reason }, ctx) {
   );
 }
 
+// "ย้อนสถานะ": one step back, to the status the booking had before (a button pressed by
+// mistake). Cancelled / expired / pending bookings cannot be taken back. No message to the customer.
+export const UNDOABLE = ["PREPARING", "READY", "IN_DELIVERY", "ACTIVE", "COMPLETED"];
+const UNDO_TO = {
+  PREPARING: ["CONFIRMED"],
+  READY: ["PREPARING"],
+  IN_DELIVERY: ["READY", "PREPARING"],
+  ACTIVE: ["IN_DELIVERY", "READY"],
+  COMPLETED: ["ACTIVE"],
+};
+
+export async function undoStatus(auth, bookingId, ctx) {
+  return withTransaction(
+    async (db) => {
+      const { rows } = await db.query(
+        `SELECT b.*, v.turnaround_minutes FROM bookings b JOIN vehicles v ON v.id = b.vehicle_id
+          WHERE b.id = $1 AND b.deleted_at IS NULL FOR UPDATE OF b`,
+        [bookingId],
+      );
+      const b = rows[0];
+      if (!b) throw NotFound("Booking");
+      if (!UNDOABLE.includes(b.status)) throw BadRequest("สถานะนี้ย้อนกลับไม่ได้");
+      // the status it came from (last move into the current one); otherwise the usual step back
+      const { rows: h } = await db.query(
+        `SELECT from_status FROM booking_status_history WHERE booking_id = $1 AND to_status = $2 AND from_status IS NOT NULL
+          ORDER BY changed_at DESC, id DESC LIMIT 1`,
+        [b.id, b.status],
+      );
+      const to = UNDO_TO[b.status].includes(h[0]?.from_status) ? h[0].from_status : UNDO_TO[b.status][0];
+
+      await db.query("SELECT set_config('app.status_reason', $1, true)", ["ย้อนสถานะโดยแอดมิน"]);
+      const set = ["status = $2"];
+      if (b.status === "ACTIVE") set.push("actual_pickup_at = NULL", "delivered_at = NULL");
+      if (b.status === "COMPLETED") set.push("actual_return_at = NULL");
+      if (b.status === "IN_DELIVERY") set.push("delivery_eta_at = NULL");
+      await db.query(`UPDATE bookings SET ${set.join(", ")} WHERE id = $1`, [b.id, to]);
+
+      // an early return had shortened the car hold: it runs to the planned return again
+      if (b.status === "COMPLETED") {
+        await db.query(
+          `UPDATE vehicle_availability_blocks SET during = tstzrange(lower(during), $2::timestamptz + make_interval(mins => $3), '[)')
+            WHERE booking_id = $1 AND block_type = 'BOOKING' AND released_at IS NULL`,
+          [b.id, b.return_at, b.turnaround_minutes],
+        );
+      }
+      // the delivery job follows: delivered → on the road again; on the road → not started
+      if (b.fulfillment_type === "DELIVERY" && (b.status === "ACTIVE" || b.status === "IN_DELIVERY")) {
+        const [from, back] = b.status === "ACTIVE" ? ["DELIVERED", "EN_ROUTE"] : ["EN_ROUTE", "ASSIGNED"];
+        await db.query(
+          `UPDATE delivery_assignments SET status = $3${b.status === "ACTIVE" ? ", completed_at = NULL" : ", started_at = NULL"}
+            WHERE id = (SELECT id FROM delivery_assignments WHERE booking_id = $1 AND assignment_type = 'DELIVERY' AND status = $2
+                         ORDER BY created_at DESC LIMIT 1)`,
+          [b.id, from, back],
+        );
+      }
+      await recordAudit(db, ctx, { action: "booking.status_undone", entityType: "booking", entityId: b.id, before: { status: b.status }, after: { status: to } });
+      return { id: b.id, status: to };
+    },
+    { actorId: auth.user.id },
+  );
+}
+

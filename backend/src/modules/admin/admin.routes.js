@@ -144,6 +144,15 @@ export function adminRoutes() {
       res.json({ data });
     },
   );
+  // "ย้อนสถานะ": back one step (a button pressed by mistake)
+  router.post(
+    "/bookings/:id/status/undo",
+    requireAnyPermission(P.BOOKINGS_WRITE, P.DELIVERIES_UPDATE),
+    validate({ params: idParam }),
+    async (req, res) => {
+      res.json({ data: await operations.undoStatus(req.auth, req.valid.params.id, auditContext(req)) });
+    },
+  );
 
   // ---- dispatch: month calendar, drivers, live positions, printable contract
   router.get("/dispatch/summary", requirePermission(P.BOOKINGS_READ), async (_req, res) => {
