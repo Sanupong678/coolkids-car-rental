@@ -109,8 +109,12 @@ async function dropUnprovenPassword(db, userId, providerName, ctx) {
 /** Creates a session (only its hash is stored) and audits the sign-in. Call inside the login transaction. */
 export async function openSession(db, { userId, ctx, provider, isNewUser }) {
   const token = randomToken(32);
+  // Back-office accounts (any role) get a shorter session than customers.
+  const { rows } = await db.query("SELECT EXISTS (SELECT 1 FROM user_roles WHERE user_id = $1) AS staff", [userId]);
+  const staff = rows[0].staff;
   const session = await createSession(db, {
-    userId, tokenHash: sha256(token), ip: ctx.ip, userAgent: ctx.userAgent, ttlDays: config.SESSION_TTL_DAYS,
+    userId, tokenHash: sha256(token), ip: ctx.ip, userAgent: ctx.userAgent,
+    ttlDays: staff ? config.STAFF_SESSION_DAYS : config.SESSION_TTL_DAYS,
   });
   await recordAudit(db, { ...ctx, actorUserId: userId }, {
     action: isNewUser ? "user.signed_up" : "user.signed_in",
@@ -118,7 +122,5 @@ export async function openSession(db, { userId, ctx, provider, isNewUser }) {
     entityId: userId,
     after: { provider },
   });
-  // Back-office accounts (any role) get a browser-session cookie: closing the browser signs them out.
-  const { rows } = await db.query("SELECT EXISTS (SELECT 1 FROM user_roles WHERE user_id = $1) AS staff", [userId]);
-  return { token, expiresAt: session.expires_at, staff: rows[0].staff };
+  return { token, expiresAt: session.expires_at, staff };
 }

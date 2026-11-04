@@ -1,5 +1,5 @@
 import { watch } from 'vue'
-import { createRouter, createWebHistory } from 'vue-router'
+import { createRouter, createWebHistory, START_LOCATION } from 'vue-router'
 import { locale, t } from '@/i18n'
 import { useAuthStore } from '@/stores/auth'
 import HomeView from '@/views/HomeView.vue'
@@ -58,15 +58,38 @@ const router = createRouter({
   },
 })
 
+// Staff who were last in the back office reopen there (home-screen app, new tab, reload
+// of "/"), on the same tab; going to a customer page clears it.
+const LAST_ADMIN_KEY = 'coolkids.lastAdmin'
+const remember = (value) => {
+  try {
+    if (value) localStorage.setItem(LAST_ADMIN_KEY, value)
+    else localStorage.removeItem(LAST_ADMIN_KEY)
+  } catch { /* private mode: just start on the homepage */ }
+}
+const lastAdmin = () => {
+  try {
+    return localStorage.getItem(LAST_ADMIN_KEY)
+  } catch {
+    return null
+  }
+}
+
 // UX-level guards only. Real enforcement is server-side on every API call.
-router.beforeEach(async (to) => {
+router.beforeEach(async (to, from) => {
   const auth = useAuthStore()
   if (!auth.ready) await auth.load()
   if (to.meta.requiresAuth && !auth.isSignedIn) return { path: '/', query: { signin: to.fullPath } }
   if (to.meta.requiresStaff && !auth.isStaff) return { path: '/' }
+  if (from === START_LOCATION && to.name === 'home' && !Object.keys(to.query).length && auth.isStaff) {
+    const last = lastAdmin()
+    if (last?.startsWith('/admin')) return last
+  }
 })
 
 router.afterEach((to) => {
+  if (to.name === 'admin') remember(to.fullPath)
+  else if (!to.meta.bare && to.name !== 'contract-print') remember(null)
   // Protected pages bounce guests to "/?signin=<page>": open the sign-in popup there.
   const auth = useAuthStore()
   if (to.query.signin && !auth.isSignedIn) auth.promptLogin({ returnTo: String(to.query.signin) })

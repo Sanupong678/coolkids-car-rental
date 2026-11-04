@@ -83,10 +83,11 @@ describe("password sign-in", () => {
     assert.equal(locked.body.error.code, "ACCOUNT_LOCKED");
   });
 
-  test("staff sign-in ends with the browser; a customer stays signed in", async () => {
+  test("staff stay signed in for a week, customers for the full session", async () => {
     const sid = (res) => res.headers["set-cookie"].find((c) => c.startsWith("sid="));
+    const days = (res) => (new Date(/Expires=([^;]+)/i.exec(sid(res))[1]) - Date.now()) / 86_400_000;
     const staff = await request(app).post("/api/v1/auth/login").set("Origin", ORIGIN).send({ login: "admin", password: "1234" }).expect(204);
-    assert.doesNotMatch(sid(staff), /Expires=/i, "browser-session cookie for back-office accounts");
+    assert.ok(Math.abs(days(staff) - 7) < 0.1, "back-office cookie survives closing the app, for 7 days");
     const customer = await request(app).post("/api/v1/auth/register").set("Origin", ORIGIN)
       .send({ fullName: "Kept", email: "kept@example.com", password: "s3cret-pass" }).expect(201);
     assert.match(sid(customer), /Expires=/i);

@@ -11,14 +11,14 @@ import * as passwordAuth from "./password.service.js";
 const OAUTH_COOKIE = "oauth_pending";
 const OAUTH_COOKIE_PATH = "/api/v1/auth";
 
-// Customers keep the cookie until the session expires; staff get a browser-session
-// cookie (no expiry date), so closing the browser signs them out.
+// The cookie lives as long as the session (staff: STAFF_SESSION_DAYS), so closing the
+// browser or a home-screen app doesn't sign anyone out.
 const sessionCookieOptions = (session) => ({
   httpOnly: true,
   secure: config.isProd,
   sameSite: "lax", // sent on top-level navigation back from Google, not on cross-site subrequests
   path: "/",
-  ...(session.staff ? {} : { expires: new Date(session.expiresAt) }),
+  expires: new Date(session.expiresAt),
 });
 
 const loginSchema = z.object({

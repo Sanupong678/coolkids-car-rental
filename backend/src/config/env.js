@@ -23,8 +23,11 @@ const schema = z.object({
   // Signs short-lived OAuth state cookies. 32+ random bytes.
   COOKIE_SECRET: z.string().min(32),
   SESSION_TTL_DAYS: z.coerce.number().int().positive().default(30),
+  // Back-office sign-ins last a week, so staff using the site from a phone's home
+  // screen aren't asked to sign in again every time they open it.
+  STAFF_SESSION_DAYS: z.coerce.number().int().positive().default(7),
   // A session unused for this long is revoked and its cookie cleared → sign in again.
-  STAFF_IDLE_HOURS: z.coerce.number().positive().default(12),
+  STAFF_IDLE_HOURS: z.coerce.number().positive().default(168),
   CUSTOMER_IDLE_HOURS: z.coerce.number().positive().default(72),
 
   GOOGLE_CLIENT_ID: z.string().default(""),
