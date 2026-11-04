@@ -21,7 +21,7 @@ import * as customers from "./customers.service.js";
 import * as staffEmail from "../notifications/staff-recipients.js";
 import * as documents from "../bookings/documents.service.js";
 import * as bookings from "../bookings/bookings.service.js";
-import { createBookingSchema, customerFields, numberParam, offlineConfirmSchema, priceAdjustSchema, staffBookingSchema } from "../bookings/bookings.schemas.js";
+import { createBookingSchema, customerFields, extendSchema, numberParam, offlineConfirmSchema, priceAdjustSchema, staffBookingSchema } from "../bookings/bookings.schemas.js";
 import { PAGE_KEYS } from "../rbac/pages.js";
 import * as vehicles from "./vehicles.service.js";
 
@@ -290,6 +290,14 @@ export function adminRoutes() {
     validate({ params: numberParam, body: priceAdjustSchema }),
     async (req, res) => {
       res.json({ data: await bookings.adjustBookingPrice(req.auth, req.valid.params.number, req.valid.body, auditContext(req)) });
+    },
+  );
+  router.post(
+    "/bookings/:number/extend",
+    requirePermission(P.BOOKINGS_WRITE),
+    validate({ params: numberParam, body: extendSchema }),
+    async (req, res) => {
+      res.json({ data: await bookings.extendBooking(req.auth, req.valid.params.number, req.valid.body, auditContext(req)) });
     },
   );
   router.post(
@@ -591,9 +599,10 @@ export function adminRoutes() {
     },
   );
 
-  router.get("/bookings/:id/contract-print", requirePermission(P.CONTRACTS_READ), validate({ params: idParam }), async (req, res) => {
+  const roundQuery = z.object({ round: z.coerce.number().int().min(1).max(99).optional() });
+  router.get("/bookings/:id/contract-print", requirePermission(P.CONTRACTS_READ), validate({ params: idParam, query: roundQuery }), async (req, res) => {
     res.set("Cache-Control", "no-store");
-    res.json({ data: await dispatch.contractPrint(req.valid.params.id) });
+    res.json({ data: await dispatch.contractPrint(req.valid.params.id, req.valid.query.round ?? null) });
   });
 
   // ---- fleet

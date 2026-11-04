@@ -34,7 +34,10 @@ export const completeMockPayment = (id, outcome) => post(`/payments/mock/${id}/c
 // through the API so the private bucket is never exposed.
 const BASE = import.meta.env.VITE_API_BASE ?? '/api/v1'
 export const documentUrl = (number, kind) => `${BASE}/bookings/${number}/documents/${kind}`
-export const contractPdfUrl = (number, { download = false } = {}) => `${BASE}/bookings/${number}/contract.pdf${download ? '?download=1' : ''}`
+export const contractPdfUrl = (number, { download = false, round = null } = {}) => {
+  const q = [download && 'download=1', round && `round=${round}`].filter(Boolean).join('&')
+  return `${BASE}/bookings/${number}/contract.pdf${q ? `?${q}` : ''}`
+}
 /** PromptPay slip (raw image) → { status: VERIFIED | NEEDS_REVIEW | REJECTED, reason, booking } */
 export async function uploadSlip(number, blob) {
   const res = await fetch(`${BASE}/bookings/${number}/slip`, { method: 'POST', credentials: 'include', headers: { 'Content-Type': blob.type }, body: blob })

@@ -88,6 +88,15 @@ export const priceAdjustSchema = z.object({
   discountMinor: amount, // "ส่วนลดจากแอดมิน", on top of any promotion
 });
 
+// "ใช้งานต่อ": the new return time; the extra rent defaults to the car's daily rate
+export const extendSchema = z.object({
+  returnAt: z.iso.datetime({ offset: true }),
+  rentalMinor: amount,
+});
+
+// ?round= on the contract PDF: one rental round's agreement
+export const roundQuery = z.object({ round: z.coerce.number().int().min(1).max(99).optional() }).passthrough();
+
 export const offlineConfirmSchema = z.object({
   paidMinor: z.number().int().min(0).max(100_000_000),
   method: z.enum(["cash", "transfer"]),

@@ -47,7 +47,7 @@ export const reviewBooking = (id, body) => api(`/admin/bookings/${id}/review`, {
 export const listSlips = (status) => api(`/admin/slips${status ? `?status=${status}` : ''}`).then((r) => r.data)
 export const slipImageUrl = (id) => `${BASE}/admin/slips/${id}/image`
 export const reviewSlip = (id, body) => api(`/admin/slips/${id}/review`, { method: 'POST', body }).then((r) => r.data)
-export const getContractPrint = (bookingId) => api(`/admin/bookings/${bookingId}/contract-print`).then((r) => r.data)
+export const getContractPrint = (bookingId, round) => api(`/admin/bookings/${bookingId}/contract-print${round ? `?round=${round}` : ''}`).then((r) => r.data)
 
 // Operations board: money at hand-over, deposit back, odometer, contract to the customer.
 const postJson = (path, body) => api(path, { method: 'POST', body }).then((r) => r?.data)
@@ -91,6 +91,8 @@ export const requestPayment = (number, body = {}) => postJson(`/admin/bookings/$
 export const bookingForm = (number) => api(`/admin/bookings/${number}/form`).then((r) => r.data)
 export const updateBooking = (number, body) => api(`/admin/bookings/${number}`, { method: 'PUT', body }).then((r) => r.data)
 export const adjustPrice = (number, body) => postJson(`/admin/bookings/${number}/price`, body)
+/** "ใช้งานต่อ": { returnAt, rentalMinor } → booking runs on, new contract round */
+export const extendBooking = (number, body) => postJson(`/admin/bookings/${number}/extend`, body)
 
 // Address book ("สมุดรายชื่อ"): everyone who has booked; detail has the saved details for the booking form.
 export const listCustomers = () => api('/admin/customers').then((r) => r.data)

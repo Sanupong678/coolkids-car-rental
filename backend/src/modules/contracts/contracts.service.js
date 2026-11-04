@@ -12,7 +12,7 @@ const TZ = "Asia/Bangkok";
 
 const FUEL = { PETROL: "เบนซิน / Gasoline", DIESEL: "ดีเซล / Diesel", HYBRID: "ไฮบริด / Hybrid", PLUG_IN_HYBRID: "ปลั๊กอินไฮบริด / PHEV", ELECTRIC: "ไฟฟ้า / EV" };
 
-const fmtDateTime = (d) =>
+export const fmtDateTime = (d) =>
   new Intl.DateTimeFormat("th-TH", { timeZone: TZ, day: "numeric", month: "long", year: "numeric", hour: "2-digit", minute: "2-digit" })
     .format(new Date(d))
     .replace(" เวลา ", " @ ");
@@ -96,6 +96,8 @@ export async function reissueContract(db, { bookingId, userId }, makeSnapshot) {
   const old = rows[0];
   const contractNumber = await nextContractNumber(db);
   const snapshot = {
+    // the rental round it covers (2, 3, … after "ใช้งานต่อ") carries over to re-issues
+    ...(old?.data_snapshot?.round ? { round: old.data_snapshot.round } : {}),
     ...makeSnapshot(old?.data_snapshot ?? null),
     contract: { number: contractNumber, issuedDate: fmtDate(new Date()) },
     signature: { dataUrl: null, signedAt: null },

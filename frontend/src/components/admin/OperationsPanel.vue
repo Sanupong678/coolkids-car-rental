@@ -9,6 +9,7 @@ import DocumentsDialog from '@/components/admin/ops/DocumentsDialog.vue'
 import MileageDialog from '@/components/admin/ops/MileageDialog.vue'
 import BookingOverview from '@/components/admin/ops/BookingOverview.vue'
 import PaymentDialog from '@/components/admin/ops/PaymentDialog.vue'
+import ExtendDialog from '@/components/admin/ops/ExtendDialog.vue'
 import LineClaimLink from '@/components/admin/LineClaimLink.vue'
 import BookingModal from '@/components/booking/BookingModal.vue'
 import { getVehicle } from '@/api/catalogue'
@@ -24,6 +25,8 @@ const BUCKETS = [
   ['today', 'รายการวันนี้'],
   ['to_deliver', 'เตรียมส่งรถ'],
   ['in_delivery', 'กำลังส่ง'],
+  ['in_use', 'กำลังใช้งาน'],
+  ['awaiting_return', 'รอรับรถคืน'],
   ['delivered', 'ส่งแล้ว'],
   ['cancelled', 'ยกเลิก'],
   ['unfinished', 'ยังกรอกไม่เสร็จ'],
@@ -203,13 +206,16 @@ const onlineBalance = (b) =>
     <p v-if="error" class="err" role="alert">{{ error }}</p>
 
     <ul v-if="rows.length" class="jobs">
-      <li v-for="b in rows" :id="`job-${b.number}`" :key="b.id" class="job" :class="{ focus: focus === b.number }">
+      <li v-for="b in rows" :id="`job-${b.number}`" :key="b.id" class="job" :class="{ focus: focus === b.number, finished: b.status === 'COMPLETED' }">
         <div class="row">
           <div class="c-id">
             <button type="button" class="num" title="ดูรายละเอียดการจองและคิวของรถคันนี้" @click="overview = b">{{ b.number }} <Icon name="chevron-right" :size="13" /></button>
             <small>{{ dt(b.createdAt) }}</small>
             <img v-if="b.vehicle.image" class="pic" title="ดูรายละเอียด" @click="overview = b" :src="b.vehicle.image.variants?.w640 ?? b.vehicle.image.url" alt="" loading="lazy" />
             <span class="pill" :class="pill(b)?.[1]">{{ pill(b)?.[0] ?? b.status }}</span>
+            <span v-if="b.ops?.extensions?.length" class="badge ext" :title="b.ops.extensions.map((e) => `รอบ ${e.round}: ${dt(e.from)} – ${dt(e.to)}`).join(' · ')">
+              <Icon name="calendar" :size="12" /> ลูกค้าใช้ต่อ · รอบ {{ b.ops.extensions.length + 1 }}
+            </span>
             <span v-if="b.bookedByStaff" class="badge staff" title="แอดมินกรอกการจองนี้แทนลูกค้า"><Icon name="user" :size="12" /> แอดมินจองให้</span>
             <span v-if="b.ops?.customerOnLine" class="badge line" title="ลูกค้าได้รับแจ้งสถานะทาง LINE"><Icon name="check" :size="12" /> ลูกค้าติดตามใน LINE</span>
             <span v-else-if="b.ops?.claimedAt" class="badge warn" title="ลูกค้าเปิดลิงก์นอกแอป LINE: การจองเป็นของลูกค้าแล้ว แต่แจ้งเตือนทาง LINE ไม่ได้">ลูกค้ารับการจองแล้ว (ไม่ใช่ LINE)</span>
@@ -245,6 +251,7 @@ const onlineBalance = (b) =>
           </div>
           <div class="c-money">
             <span><small>ค่าเช่า:</small> <b>{{ money(b.money.totalMinor, b.money.currency) }}</b></span>
+            <span v-for="e in b.ops?.extensions ?? []" :key="e.round" class="ext-line"><small>ใช้ต่อรอบ {{ e.round }} ({{ e.days }} วัน):</small> <b>+{{ money(e.rentalMinor, b.money.currency) }}</b></span>
             <span><small>ค่ามัดจำ:</small> <b>{{ money(b.money.depositMinor, b.money.currency) }}</b></span>
             <span v-if="feePaid(b)" class="paid"><small>เงินจอง:</small> <b>−{{ money(feePaid(b), b.money.currency) }}</b> <Icon name="check" :size="12" /></span>
             <span v-if="onlineBalance(b)" class="paid"><small>จ่ายออนไลน์ (Stripe):</small> <b>−{{ money(onlineBalance(b), b.money.currency) }}</b> <Icon name="check" :size="12" /></span>
@@ -269,6 +276,9 @@ const onlineBalance = (b) =>
           </button>
           <button v-if="unfinished(b)" type="button" class="go" @click="editing = b.number">
             <Icon name="receipt" :size="14" /> กรอกต่อ / แก้ไข
+          </button>
+          <button v-if="b.status === 'ACTIVE'" type="button" class="go extend" :disabled="busyId === b.id" @click="open('extend', b)">
+            <Icon name="calendar" :size="14" /> ใช้งานต่อ
           </button>
           <button v-if="EDITABLE.includes(b.status) && !unfinished(b)" type="button" class="ghost" :disabled="busyId === b.id" @click="openEdit(b)">
             <Icon name="receipt" :size="14" /> แก้ไขรายละเอียด
@@ -308,6 +318,7 @@ const onlineBalance = (b) =>
     <p v-else-if="data" class="none">ไม่มีรายการ</p>
 
     <PaymentDialog v-if="['pay', 'qr', 'ledger'].includes(tool?.kind)" :booking="tool.booking" :mode="{ pay: 'collect', qr: 'qr', ledger: 'ledger' }[tool.kind]" @close="onToolClose" />
+    <ExtendDialog v-if="tool?.kind === 'extend'" :booking="tool.booking" @close="onToolClose" />
     <MileageDialog v-if="tool?.kind === 'mileage'" :booking="tool.booking" @close="onToolClose" />
     <DocumentsDialog v-if="tool?.kind === 'contract'" :booking="tool.booking" @close="onToolClose" />
     <BookingOverview v-if="overview" :key="overview.id" :booking="overview" @close="overview = null" @open="openNumber" />
@@ -333,6 +344,29 @@ const onlineBalance = (b) =>
 .job.focus {
   border-color: var(--accent);
   box-shadow: 0 0 0 2px rgb(226 54 44 / 0.35);
+}
+/* "ใช้งานต่อ": the same renter keeps the car another round */
+.badge.ext {
+  border-color: #7fd3a6;
+  background: rgb(34 160 90 / 0.18);
+  color: #7ee2ad;
+}
+.ext-line b {
+  color: #7ee2ad;
+}
+.act .go.extend {
+  background: #1f9d57;
+}
+/* car back, job closed: faded grey until pointed at */
+.job.finished {
+  opacity: 0.45;
+  filter: grayscale(1);
+  transition: opacity 0.2s, filter 0.2s;
+}
+.job.finished:hover,
+.job.finished:focus-within {
+  opacity: 1;
+  filter: none;
 }
 .c-id .num {
   display: inline-flex;

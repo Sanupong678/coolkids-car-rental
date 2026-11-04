@@ -15,6 +15,9 @@ const emit = defineEmits(['close'])
 const BASE = import.meta.env.VITE_API_BASE ?? '/api/v1'
 
 const tab = ref('contract') // contract | booking | receipt
+// "ใช้งานต่อ" rounds: 1 = as first booked, 2+ = each extension (latest shown first)
+const rounds = (props.booking.ops?.extensions?.length ?? 0) + 1
+const round = ref(rounds)
 const receiptId = ref(null)
 const docs = ref(null)
 const lang = ref('th')
@@ -40,16 +43,16 @@ onMounted(load)
 const q = computed(() => (tab.value === 'booking' ? 'kind=booking' : `kind=receipt&receipt=${receiptId.value}`))
 const src = computed(() =>
   tab.value === 'contract'
-    ? `/admin/contracts/${props.booking.id}/print?lang=${lang.value}&auto=0`
+    ? `/admin/contracts/${props.booking.id}/print?lang=${lang.value}&auto=0&round=${round.value}`
     : `${BASE}/admin/bookings/${props.booking.id}/documents/view?${q.value}&v=${stamp.value}`,
 )
-const pdf = computed(() => (tab.value === 'contract' ? contractPdfUrl(props.booking.number, { download: true }) : `${BASE}/admin/bookings/${props.booking.id}/documents/pdf?${q.value}`))
+const pdf = computed(() => (tab.value === 'contract' ? contractPdfUrl(props.booking.number, { download: true, round: rounds > 1 ? round.value : null }) : `${BASE}/admin/bookings/${props.booking.id}/documents/pdf?${q.value}`))
 const current = computed(() => (tab.value === 'booking' ? docs.value?.booking : docs.value?.receipts.find((r) => r.id === receiptId.value)))
 const ready = computed(() => tab.value !== 'receipt' || receiptId.value)
 const money = (m) => `฿${(m / 100).toLocaleString('th-TH')}`
 
 function print() {
-  if (tab.value === 'contract') window.open(`/admin/contracts/${props.booking.id}/print?lang=${lang.value}`, '_blank', 'noopener')
+  if (tab.value === 'contract') window.open(`/admin/contracts/${props.booking.id}/print?lang=${lang.value}&round=${round.value}`, '_blank', 'noopener')
   else frame.value?.contentWindow?.print()
 }
 
@@ -111,6 +114,10 @@ async function saveSignature() {
         <button v-for="[k, t] in [['th', 'ไทย'], ['en', 'English'], ['zh', '中文']]" :key="k" type="button" :class="{ on: lang === k }" @click="lang = k">{{ t }}</button>
       </div>
       <span class="grow" />
+      <div v-if="tab === 'contract' && rounds > 1" class="seg rounds" role="group" aria-label="สัญญารอบที่">
+        <small>สัญญารอบ</small>
+        <button v-for="n in rounds" :key="n" type="button" :class="{ on: round === n }" :title="n === 1 ? 'สัญญาเช่ารอบแรก' : `ใช้งานต่อ รอบที่ ${n}`" @click="round = n">{{ n }}</button>
+      </div>
       <template v-if="tab !== 'contract' && ready">
         <button type="button" class="btn" @click="signing = 'SHOP'"><Icon name="sparkles" :size="15" /> เซ็นชื่อ<small v-if="current?.signed?.shop"> ✓ร้าน</small><small v-if="current?.signed?.customer"> ✓ลูกค้า</small></button>
       </template>
@@ -277,5 +284,17 @@ async function saveSignature() {
   .mail {
     flex-direction: column;
   }
+}
+.seg.rounds {
+  align-items: center;
+}
+.seg.rounds small {
+  padding: 0 6px;
+  color: #6b6e7a;
+  font-size: 0.78rem;
+}
+.seg.rounds button {
+  min-width: 36px;
+  font-weight: 700;
 }
 </style>

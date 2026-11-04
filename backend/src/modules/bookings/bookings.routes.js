@@ -133,8 +133,8 @@ export function bookingRoutes() {
     res.json({ data: await service.getContract(req.auth, req.valid.params.number) });
   });
 
-  router.get("/bookings/:number/contract.pdf", requireAuth, paymentLimiter, validate({ params: schemas.numberParam }), async (req, res) => {
-    const { body, filename } = await service.contractPdf(req.auth, req.valid.params.number);
+  router.get("/bookings/:number/contract.pdf", requireAuth, paymentLimiter, validate({ params: schemas.numberParam, query: schemas.roundQuery }), async (req, res) => {
+    const { body, filename } = await service.contractPdf(req.auth, req.valid.params.number, req.valid.query.round ?? null);
     res.set({
       "Content-Type": "application/pdf",
       "Content-Disposition": `${req.query.download ? "attachment" : "inline"}; filename="${filename}"`,

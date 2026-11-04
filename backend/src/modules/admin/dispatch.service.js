@@ -3,7 +3,7 @@ import { BadRequest, Conflict, NotFound } from "../../shared/errors.js";
 import { distanceMeters, minutesToDrive } from "../../shared/geo.js";
 import { getSettings } from "../../shared/settings.js";
 import { recordAudit } from "../audit/audit.service.js";
-import { navigationUrl, notify } from "../bookings/bookings.service.js";
+import { bookingRounds, navigationUrl, notify } from "../bookings/bookings.service.js";
 import { fullDocumentNumbers, signatureDataUrl } from "../contracts/contracts.service.js";
 
 // Dispatch planning for the dashboard: the month calendar of hand-overs, one
@@ -301,7 +301,11 @@ export async function markArrived(auth, bookingId, ctx) {
  * render it in Thai, English or Chinese. Document numbers come from the
  * renter's encrypted identity, in full (the contract snapshot only holds them masked).
  */
-export async function contractPrint(bookingId) {
+const latestRound = async (bookingId) =>
+  (await pool.query("SELECT coalesce(max(round), 1) AS n FROM booking_extensions WHERE booking_id = $1", [bookingId])).rows[0].n;
+
+/** The printable agreement; `round` picks a rental round (1 = as first booked, 2+ = "ใช้งานต่อ"), default the latest. */
+export async function contractPrint(bookingId, round = null) {
   const { rows } = await pool.query(
     `SELECT b.*, v.brand, v.model, v.trim, v.license_plate, v.fuel_type,
             l.name AS branch_name, l.city AS branch_city,
@@ -314,12 +318,21 @@ export async function contractPrint(bookingId) {
        FROM bookings b
        JOIN vehicles v ON v.id = b.vehicle_id
        JOIN locations l ON l.id = b.pickup_location_id
-       LEFT JOIN contracts ct ON ct.booking_id = b.id AND ct.status IN ('ISSUED','SIGNED')
+       LEFT JOIN LATERAL (
+         SELECT * FROM contracts c WHERE c.booking_id = b.id AND coalesce((c.data_snapshot->>'round')::int, 1) = $2
+          ORDER BY (c.status IN ('ISSUED','SIGNED')) DESC, c.created_at DESC LIMIT 1
+       ) ct ON true
       WHERE b.id = $1 AND b.deleted_at IS NULL`,
-    [bookingId],
+    [bookingId, round ?? (await latestRound(bookingId))],
   );
   const r = rows[0];
   if (!r) throw NotFound("Booking");
+  const rounds = await bookingRounds(pool, r);
+  const at = rounds.find((x) => x.round === (round ?? rounds.length)) ?? rounds.at(-1);
+  // round 1 once extended: the first period and its money; a later round: only that extension
+  const period = rounds.length === 1 ? null : at.round === 1
+    ? { pickupAt: at.from, returnAt: at.to, days: at.days, rentalMinor: Number(r.rental_minor) - rounds.slice(1).reduce((n, x) => n + x.extraMinor, 0), totalMinor: at.firstTotalMinor }
+    : { pickupAt: at.from, returnAt: at.to, days: at.days, rentalMinor: at.extraMinor, deliveryMinor: 0, discountMinor: 0, totalMinor: at.extraMinor, depositMinor: 0 };
   const settings = await getSettings();
   const snap = r.data_snapshot ?? {};
   const docs = await fullDocumentNumbers(pool, r.id);
@@ -339,10 +352,12 @@ export async function contractPrint(bookingId) {
       licenseMasked: docs?.license ?? snap.renter?.licenseMasked ?? null,
     },
     vehicle: { make: r.brand, model: [r.model, r.trim].filter(Boolean).join(" "), plate: r.license_plate, fuel: r.fuel_type },
+    round: at.round,
+    rounds: rounds.map((x) => ({ round: x.round, from: x.from, to: x.to })),
     rental: {
-      pickupAt: r.pickup_at,
-      returnAt: r.return_at,
-      days: r.rental_days,
+      pickupAt: period?.pickupAt ?? r.pickup_at,
+      returnAt: period?.returnAt ?? r.return_at,
+      days: period?.days ?? r.rental_days,
       fulfillment: r.fulfillment_type,
       area: r.area_of_use ?? (r.fulfillment_type === "DELIVERY" ? r.delivery_address?.address : `${r.branch_name}, ${r.branch_city}`),
       purpose: r.rental_purpose === "REPLACEMENT" ? "replacement" : r.rental_purpose === "TRAVEL" ? "travel" : null,
@@ -352,11 +367,11 @@ export async function contractPrint(bookingId) {
     declared: Boolean(snap.declarations),
     money: {
       currency: r.currency,
-      rentalMinor: Number(r.rental_minor),
-      deliveryMinor: Number(r.delivery_minor),
-      discountMinor: Number(r.discount_minor),
-      depositMinor: Number(r.deposit_minor),
-      totalMinor: Number(r.total_minor),
+      rentalMinor: period?.rentalMinor ?? Number(r.rental_minor),
+      deliveryMinor: period?.deliveryMinor ?? Number(r.delivery_minor),
+      discountMinor: period?.discountMinor ?? Number(r.discount_minor),
+      depositMinor: period?.depositMinor ?? Number(r.deposit_minor), // a later round keeps round 1's deposit, none again
+      totalMinor: period?.totalMinor ?? Number(r.total_minor),
     },
     signature: await signatureDataUrl(pool, r.signature_media_id),
   };

@@ -666,3 +666,57 @@ describe("booking slip and receipts", () => {
     await customer.get(`/api/v1/admin/bookings/${b.id}/documents`).expect(403);
   });
 });
+
+describe("ใช้งานต่อ: the renter keeps the car another round", () => {
+  let customer;
+  let b;
+  before(async () => {
+    customer = await customerAgent("extend@example.com");
+    b = await signedBooking(customer, 300);
+    slipok = () => ({ status: 200, body: { success: true, data: slipData() } });
+    assert.equal((await sendSlip(customer, b.number, png(71)).expect(200)).body.data.status, "VERIFIED");
+  });
+  const extend = (body) => staff.post(`/api/v1/admin/bookings/${b.number}/extend`).set("Origin", ORIGIN).send(body);
+
+  test("only a car with the renter can be extended", async () => {
+    await extend({ returnAt: inDays(304) }).expect(409);
+    for (const status of ["PREPARING", "READY", "ACTIVE"]) {
+      await staff.post(`/api/v1/admin/bookings/${b.id}/status`).set("Origin", ORIGIN).send({ status }).expect(200);
+    }
+    await extend({ returnAt: inDays(301) }).expect(400); // not after the current return
+  });
+
+  test("same booking runs on: day-rate rent added, no fee, new contract round, customer told", async () => {
+    const before = (await customer.get(`/api/v1/bookings/${b.number}`).expect(200)).body.data;
+    const { rows: [car] } = await pool.query("SELECT daily_rate_minor FROM vehicles WHERE slug = $1", [SLUG]);
+    const after = (await extend({ returnAt: inDays(304) }).expect(200)).body.data;
+    assert.equal(after.number, b.number);
+    assert.equal(new Date(after.returnAt).toISOString(), inDays(304));
+    assert.equal(after.money.totalMinor - before.money.totalMinor, car.daily_rate_minor * 2);
+
+    const board = (await staff.get("/api/v1/admin/operations").expect(200)).body.data;
+    const card = Object.values(board.lists).flat().find((x) => x.number === b.number);
+    assert.deepEqual(card.ops.extensions.map((e) => [e.round, e.days, e.rentalMinor]), [[2, 2, car.daily_rate_minor * 2]]);
+
+    const r2 = (await staff.get(`/api/v1/admin/bookings/${b.id}/contract-print`).expect(200)).body.data;
+    assert.equal(r2.round, 2);
+    assert.equal(new Date(r2.rental.pickupAt).toISOString(), inDays(302));
+    assert.equal(r2.money.totalMinor, car.daily_rate_minor * 2);
+    assert.equal(r2.money.depositMinor, 0, "round 1's deposit stays held");
+    const r1 = (await staff.get(`/api/v1/admin/bookings/${b.id}/contract-print?round=1`).expect(200)).body.data;
+    assert.equal(new Date(r1.rental.returnAt).toISOString(), inDays(302));
+    assert.notEqual(r1.contract.number, r2.contract.number);
+    await customer.get(`/api/v1/bookings/${b.number}/contract.pdf?round=1`).expect(200);
+
+    const { rows } = await pool.query("SELECT body FROM notifications WHERE entity_id = $1 AND notification_type = 'BOOKING_EXTENDED' AND channel = 'IN_APP'", [b.id]);
+    assert.equal(rows.length, 1);
+    assert.match(rows[0].body, /ใช้งานต่อ/);
+  });
+
+  test("it cannot run into the next renter's booking", async () => {
+    const next = await customerAgent("next@example.com");
+    await next.post("/api/v1/bookings").set("Origin", ORIGIN).send(bookingBody(306)).expect(201);
+    const res = await extend({ returnAt: inDays(307) }).expect(409);
+    assert.equal(res.body.error.code, "VEHICLE_TAKEN");
+  });
+});

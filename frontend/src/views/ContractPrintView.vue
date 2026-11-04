@@ -66,7 +66,7 @@ const docNo = computed(() => data.value?.contract?.number ?? data.value?.booking
 
 async function load() {
   try {
-    data.value = await getContractPrint(route.params.id)
+    data.value = await getContractPrint(route.params.id, Number(route.query.round) || null)
     document.title = `${docNo.value} — ${t.value.title}`
     await nextTick()
     await Promise.all([...document.querySelectorAll('.sheet img')].map((img) => (img.complete ? null : new Promise((r) => (img.onload = img.onerror = r)))))
@@ -117,6 +117,7 @@ const closeTab = () => window.close()
             <h1>{{ t.title }}</h1>
             <em>{{ t.subtitle }}</em>
             <small>{{ t.no }} {{ docNo }}</small>
+            <small v-if="data.rounds?.length > 1" class="round">{{ { th: 'สัญญาเช่ารอบที่', en: 'Rental round', zh: '租赁轮次' }[lang] }} {{ data.round }}</small>
           </div>
         </header>
 
@@ -372,6 +373,10 @@ b {
 .ttl small {
   font-size: 6.5pt;
   color: var(--muted);
+}
+.ttl small.round {
+  color: var(--ink, #14161f);
+  font-weight: 700;
 }
 
 /* details */

@@ -9,7 +9,7 @@ import * as storage from "../../shared/storage.js";
 import { recordAudit } from "../audit/audit.service.js";
 import { findVehicleForBooking } from "../catalogue/catalogue.repository.js";
 import {
-  buildSnapshot, issueContract, nextContractNumber, reissueContract, renderContract, signContract, snapshotMoney,
+  buildSnapshot, fmtDateTime, issueContract, nextContractNumber, reissueContract, renderContract, signContract, snapshotMoney,
 } from "../contracts/contracts.service.js";
 import { renderPdf } from "../contracts/pdf.js";
 import * as maps from "../maps/maps.service.js";
@@ -851,6 +851,17 @@ export async function liveContract(db, bookingId) {
   return rows[0];
 }
 
+/** The contract of one rental round (1 = as first booked, 2+ = "ใช้งานต่อ"). */
+async function roundContract(db, bookingId, round) {
+  const { rows } = await db.query(
+    `SELECT * FROM contracts WHERE booking_id = $1 AND coalesce((data_snapshot->>'round')::int, 1) = $2
+      ORDER BY (status IN ('ISSUED','SIGNED')) DESC, created_at DESC LIMIT 1`,
+    [bookingId, round],
+  );
+  if (!rows[0]) throw NotFound("Contract");
+  return rows[0];
+}
+
 export async function getContract(auth, number) {
   const b = await loadBooking(pool, number, auth);
   const contract = await liveContract(pool, b.id);
@@ -893,9 +904,9 @@ export async function signBookingContract(auth, number, { signature }, ctx) {
  * so its PDF is rendered once and kept in private storage; an unsigned one is
  * rendered fresh each time and not stored.
  */
-export async function contractPdf(auth, number) {
+export async function contractPdf(auth, number, round = null) {
   const b = await loadBooking(pool, number, auth);
-  const contract = await liveContract(pool, b.id);
+  const contract = round ? await roundContract(pool, b.id, round) : await liveContract(pool, b.id);
   const filename = `${contract.contract_number}.pdf`;
   if (contract.status === "SIGNED" && contract.document_media_id) {
     const { rows } = await pool.query("SELECT storage_provider, storage_key FROM media WHERE id = $1 AND deleted_at IS NULL", [
@@ -1371,6 +1382,97 @@ export async function adjustBookingPrice(staff, number, input, ctx) {
     { actorId: staff.user.id },
   );
   return getBooking(staff, number);
+}
+
+/**
+ * "ใช้งานต่อ": the renter keeps the car until a later return time. Same booking (number,
+ * payments, deposit, documents); the extra days are charged at the car's daily rate
+ * (staff may set the amount) with no reservation fee, the car hold moves, and a contract
+ * for the new round (period + rent of the extension only) replaces the live one. The
+ * customer is told the new dates.
+ */
+export async function extendBooking(staff, number, { returnAt: until, rentalMinor }, ctx) {
+  const settings = await getSettings();
+  const newReturn = new Date(until);
+  let round;
+  await withTransaction(
+    async (db) => {
+      const b = await loadBooking(db, number, staff, { lock: true });
+      if (b.status !== "ACTIVE") throw Conflict("NOT_IN_USE", "ต่อเวลาได้เฉพาะรถที่ลูกค้ากำลังใช้งานอยู่");
+      const from = new Date(b.return_at);
+      if (newReturn <= from) throw BadRequest("New return must be later", { returnAt: ["วันคืนรถใหม่ต้องหลังวันคืนรถเดิม"] });
+      const v = await findVehicleForBooking(db, b.vehicle_slug);
+      if (!v) throw NotFound("Vehicle");
+      const days = rentalDaysBetween(from, newReturn, settings["pricing.extra_hour_grace_minutes"]);
+      const quoted = priceBooking(v, days, 0, settings);
+      const rent = rentalMinor ?? quoted.rental - quoted.discount;
+
+      const { rows: prev } = await db.query("SELECT coalesce(max(round), 1) AS n FROM booking_extensions WHERE booking_id = $1", [b.id]);
+      round = prev[0].n + 1;
+      const lines = await priceLines(db, b.id);
+      await db.query(
+        `INSERT INTO booking_items (booking_id, item_type, description, quantity, unit_amount_minor, amount_minor, sort_order)
+         VALUES ($1, 'RENTAL', $2, $3, $4, $5, $6)`,
+        [b.id, `ใช้งานต่อ รอบ ${round}: ${days} วัน`, days, Math.round(rent / days), rent, lines.last + 1],
+      );
+      const money = totalsOf({ ...lines, rental: lines.rental + rent, deposit: Number(b.deposit_minor) }, settings);
+      await appendAdjustments(db, b.id, await priceLines(db, b.id), money, `ใช้งานต่อ รอบ ${round}`); // VAT on the extra rent, if prices exclude it
+      await db.query(
+        `UPDATE bookings SET return_at = $2, rental_days = rental_days + $3, subtotal_minor = $4, discount_minor = $5, tax_minor = $6,
+                total_minor = $7, return_reminded_at = NULL WHERE id = $1`,
+        [b.id, newReturn, days, money.subtotal, money.discount, money.tax, money.total],
+      );
+      // the car hold runs on to the new return; a clash with the next renter → 409
+      await db.query(
+        `UPDATE vehicle_availability_blocks SET during = tstzrange(lower(during), $2::timestamptz + make_interval(mins => $3), '[)')
+          WHERE booking_id = $1 AND block_type = 'BOOKING' AND released_at IS NULL`,
+        [b.id, newReturn, v.turnaround_minutes],
+      ).catch((err) => {
+        if (err.code === "23P01") throw Conflict("VEHICLE_TAKEN", "รถคันนี้มีคิวจองต่อในช่วงวันที่เลือก ต่อเวลาได้ถึงก่อนคิวถัดไปเท่านั้น");
+        throw err;
+      });
+
+      const contract = await reissueContract(db, { bookingId: b.id, userId: b.user_id }, (old) => ({
+        ...old,
+        round,
+        rental: { ...old?.rental, pickupAt: fmtDateTime(from), returnAt: fmtDateTime(newReturn), days },
+        // the deposit taken in round 1 stays held: none is asked again
+        money: snapshotMoney({ rental: rent, deposit: 0, delivery: 0, returnPickup: 0, discount: 0, total: rent, dueNow: rent }),
+      }));
+      await db.query(
+        `INSERT INTO booking_extensions (booking_id, round, from_at, to_at, days, rental_minor, contract_id, created_by)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+        [b.id, round, from, newReturn, days, rent, contract.id, staff.user.id],
+      );
+      const when = (d) => new Intl.DateTimeFormat("th-TH", { timeZone: "Asia/Bangkok", dateStyle: "medium", timeStyle: "short" }).format(d);
+      await notify(db, b.user_id, {
+        type: "BOOKING_EXTENDED", bookingId: b.id,
+        title: "ต่อเวลาเช่ารถเรียบร้อย",
+        body: `${b.booking_number}: ใช้งานต่อ ${when(from)} – ${when(newReturn)} (${days} วัน) ค่าเช่าเพิ่ม ฿${(rent / 100).toLocaleString("th-TH")} · กรุณาเซ็นสัญญาเช่ารอบที่ ${round}`,
+        data: { round, returnAt: newReturn, days, rentalMinor: rent },
+      });
+      await recordAudit(db, ctx, {
+        action: "booking.extended", entityType: "booking", entityId: b.id,
+        before: { returnAt: b.return_at, total: Number(b.total_minor) },
+        after: { returnAt: newReturn, total: money.total, round, days, rent },
+      });
+    },
+    { actorId: staff.user.id },
+  );
+  return getBooking(staff, number);
+}
+
+/** The rental rounds of a booking: round 1 as first booked, then each "ใช้งานต่อ". */
+export async function bookingRounds(db, b) {
+  const { rows } = await db.query(
+    "SELECT round, from_at, to_at, days, rental_minor, contract_id FROM booking_extensions WHERE booking_id = $1 ORDER BY round",
+    [b.id],
+  );
+  const extra = rows.reduce((n, r) => n + Number(r.rental_minor), 0);
+  return [
+    { round: 1, from: b.pickup_at, to: rows[0]?.from_at ?? b.return_at, days: b.rental_days - rows.reduce((n, r) => n + r.days, 0), extraMinor: null, firstTotalMinor: Number(b.total_minor) - extra },
+    ...rows.map((r) => ({ round: r.round, from: r.from_at, to: r.to_at, days: r.days, extraMinor: Number(r.rental_minor), contractId: r.contract_id })),
+  ];
 }
 
 // ---------------------------------------------------------------- balance (rent + deposit) online

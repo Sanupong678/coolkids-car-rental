@@ -22,13 +22,16 @@ export const BUCKETS = {
   pending_payment: `b.status = 'PENDING' AND b.hold_expires_at > now() AND NOT (${STAFF_DRAFT})`,
   to_deliver: "b.status IN ('CONFIRMED','PREPARING','READY')",
   in_delivery: "b.status = 'IN_DELIVERY'",
+  // with the renter: due back after the board's day (กำลังใช้งาน) / that day or overdue (รอรับรถคืน)
+  in_use: "b.status = 'ACTIVE' AND (b.return_at AT TIME ZONE 'Asia/Bangkok')::date > $1::date",
+  awaiting_return: "b.status = 'ACTIVE' AND (b.return_at AT TIME ZONE 'Asia/Bangkok')::date <= $1::date",
   delivered: "b.status IN ('ACTIVE','COMPLETED')",
   // a draft dropped by "แก้ไขรายละเอียด" was replaced by a new booking, not cancelled by anyone
   cancelled: `b.status IN ('CANCELLED','REFUNDED','EXPIRED') AND b.cancellation_reason IS DISTINCT FROM '${DRAFT_REPLACED}'`,
 };
 
 const LIST_SELECT = `
-  SELECT b.*, v.slug AS vehicle_slug, v.brand, v.model, v.trim, v.model_year, v.license_plate, v.fleet_no,
+  SELECT b.*, v.slug AS vehicle_slug, v.daily_rate_minor AS vehicle_daily_minor, v.brand, v.model, v.trim, v.model_year, v.license_plate, v.fleet_no,
          img.file_url AS image_url, img.variants AS image_variants, ci.legal_full_name, ci.phone AS customer_phone,
          ci.id_document_type, ci.id_front_media_id, ci.id_back_media_id, ci.license_front_media_id,
          u.email AS customer_email, l.name AS branch_name, l.latitude::float AS branch_lat, l.longitude::float AS branch_lng,
@@ -54,6 +57,9 @@ const LIST_SELECT = `
              AND p.provider = 'counter' AND p.status = 'SUCCEEDED') AS paid_counter_minor,
          (SELECT COALESCE(sum(p.amount_minor), 0) FROM payments p WHERE p.booking_id = b.id AND p.purpose = 'DEPOSIT'
              AND p.status IN ('SUCCEEDED','PARTIALLY_REFUNDED','REFUNDED')) AS deposit_collected_minor,
+         -- "ใช้งานต่อ" rounds (2, 3, …): period and extra rent of each
+         (SELECT json_agg(json_build_object('round', e.round, 'from', e.from_at, 'to', e.to_at, 'days', e.days, 'rentalMinor', e.rental_minor)
+                          ORDER BY e.round) FROM booking_extensions e WHERE e.booking_id = b.id) AS extensions,
          (SELECT count(*) FROM bookings pb WHERE pb.user_id = b.user_id AND pb.status = 'COMPLETED' AND pb.id <> b.id)::int AS customer_trips,
          -- the booking's account can get LINE messages (signed in with LINE, or took a "follow in LINE" link)
          EXISTS (SELECT 1 FROM user_identities i WHERE i.user_id = b.user_id AND i.provider = 'line') AS customer_on_line
@@ -73,7 +79,8 @@ export async function board(date) {
   const counts = {};
   const lists = {};
   for (const [key, where] of Object.entries(BUCKETS)) {
-    const order = key === "delivered" || key === "cancelled" ? "b.updated_at DESC" : "b.pickup_at ASC";
+    const order = key === "delivered" || key === "cancelled" ? "b.updated_at DESC"
+      : key === "in_use" || key === "awaiting_return" ? "b.return_at ASC" : "b.pickup_at ASC";
     const { rows } = await pool.query(
       `${LIST_SELECT} WHERE b.deleted_at IS NULL AND ${where} ${key === "today" ? "" : "AND $1::date IS NOT NULL"}
         ORDER BY ${order} LIMIT 200`,
@@ -84,6 +91,8 @@ export async function board(date) {
       customerEmail: r.contact_email ?? r.customer_email,
       ops: {
         customerTrips: r.customer_trips,
+        dailyMinor: Number(r.vehicle_daily_minor), // the car's day rate: "ใช้งานต่อ" prices extra days with it
+        extensions: (r.extensions ?? []).map((e) => ({ ...e, rentalMinor: Number(e.rentalMinor) })),
         customerOnLine: r.customer_on_line, claimedAt: r.claimed_at,
         odometerStartKm: r.odometer_start_km, odometerEndKm: r.odometer_end_km,
         paidOnlineMinor: Number(r.paid_online_minor), paidCounterMinor: Number(r.paid_counter_minor),

@@ -208,13 +208,12 @@ export async function sendContract(auth, bookingId, { via, email }, ctx) {
 // ---------------------------------------------------------------- booking timeline (cars × days)
 
 // Bar colour (owner 2026-10-31): rent still owed (only the reservation fee / deposit
-// paid) → orange; not delivered yet → blue; with the renter, waiting to come back → green;
-// returned → grey.
+// paid) → orange; not delivered yet → blue; with the renter (in use) → green.
+// Returned bookings are left off the calendar (owner 2026-11-04).
 const PHASE = (r) => {
   if (r.status === "PENDING") return "pending"; // รออนุมัติ / รอชำระ
   if (Number(r.rent_paid_minor) < Number(r.total_minor)) return "unpaid"; // ค้างค่าเช่า
-  if (r.status === "ACTIVE") return "out"; // รอรับรถคืน
-  if (r.status === "COMPLETED") return "done"; // คืนรถแล้ว
+  if (r.status === "ACTIVE") return "out"; // ใช้งานอยู่
   return "handover"; // รอส่งรถ
 };
 
@@ -235,7 +234,7 @@ export async function schedule(from, to) {
        FROM bookings b
        JOIN users u ON u.id = b.user_id
        LEFT JOIN customer_identities ci ON ci.id = b.customer_identity_id
-      WHERE b.deleted_at IS NULL AND b.status NOT IN ('EXPIRED','CANCELLED','REFUNDED')
+      WHERE b.deleted_at IS NULL AND b.status NOT IN ('EXPIRED','CANCELLED','REFUNDED','COMPLETED')
         AND b.pickup_at < ($2::date + 1)::timestamp AT TIME ZONE '${TZ}' AND b.return_at >= $1::timestamp AT TIME ZONE '${TZ}'
       ORDER BY b.pickup_at`,
     [from, to],
