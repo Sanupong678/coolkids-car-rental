@@ -171,6 +171,12 @@ describe("PromptPay slip → booking confirmed (ตัดยอด)", () => {
     assert.equal(calls[0].form.get("log"), "true");
     const { rows } = await pool.query("SELECT status, trans_ref, amount_minor FROM payment_slips WHERE booking_id = $1", [first.id]);
     assert.deepEqual(rows, [{ status: "VERIFIED", trans_ref: data.transRef, amount_minor: 100_000 }]);
+    // staff see it at once on the board, ready to deliver, with the fee shown as paid
+    const board = (await staff.get("/api/v1/admin/operations").expect(200)).body.data;
+    const card = board.lists.to_deliver.find((x) => x.number === first.number);
+    assert.ok(card, "the paid booking is on the board under เตรียมส่งรถ");
+    assert.equal(card.payment.status, "SUCCEEDED");
+    assert.ok(!board.lists.pending_payment.some((x) => x.number === first.number));
   });
 
   test("a slip cannot pay twice: same picture, or same bank reference in a new picture", async () => {
