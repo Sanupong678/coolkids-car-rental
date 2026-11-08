@@ -26,6 +26,33 @@ async function load() {
 }
 onMounted(load)
 
+// The forms check themselves (novalidate): the browser's own pop-ups are easy to miss on a
+// phone and say nothing in Thai, so a wrong field looked like "the button does nothing".
+const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+const LOGIN = /^[A-Za-z0-9._@-]{3,60}$/
+const PHONE = /^\+?[0-9 ()-]{6,20}$/
+function createProblem(f) {
+  const email = f.email.trim()
+  const login = f.login.trim()
+  if (f.fullName.trim().length < 2) return 'ใส่ชื่อ-นามสกุล อย่างน้อย 2 ตัวอักษร'
+  if (email && !EMAIL.test(email)) return 'Gmail ไม่ถูกต้อง (เช่น mint@gmail.com)'
+  if (!email && !login && !f.password) return 'ใส่ Gmail หรือชื่อผู้ใช้ + รหัสผ่าน อย่างน้อยหนึ่งอย่าง'
+  if (login && !LOGIN.test(login)) return 'ชื่อผู้ใช้ใช้ได้เฉพาะ a-z A-Z 0-9 . _ - @ ยาว 3–60 ตัว (ไม่มีภาษาไทยหรือเว้นวรรค)'
+  if (Boolean(login) !== Boolean(f.password)) return 'ชื่อผู้ใช้และรหัสผ่านต้องใส่คู่กัน'
+  if (f.password && f.password.length < 8) return 'รหัสผ่านต้องยาวอย่างน้อย 8 ตัว'
+  if (f.phone.trim() && !PHONE.test(f.phone.trim())) return 'เบอร์โทรไม่ถูกต้อง'
+  if (!f.pages.length) return 'เลือกหน้าที่เข้าได้อย่างน้อย 1 หน้า'
+  return ''
+}
+function editProblem(e) {
+  if (e.email.trim() && !EMAIL.test(e.email.trim())) return 'Gmail ไม่ถูกต้อง (เช่น mint@gmail.com)'
+  if (e.password && e.password.length < 8) return 'รหัสผ่านใหม่ต้องยาวอย่างน้อย 8 ตัว'
+  if (!e.pages.length) return 'เลือกหน้าที่เข้าได้อย่างน้อย 1 หน้า'
+  return ''
+}
+// server field names → Thai, for anything it still refuses
+const FIELD = { fullName: 'ชื่อ-นามสกุล', login: 'ชื่อผู้ใช้', password: 'รหัสผ่าน', email: 'Gmail', phone: 'เบอร์โทร', pages: 'หน้าที่เข้าได้' }
+
 async function run(fn, done) {
   busy.value = true
   error.value = ''
@@ -35,7 +62,9 @@ async function run(fn, done) {
     await load()
     note.value = done
   } catch (err) {
-    error.value = err.details ? Object.values(err.details).flat().join(' · ') : err.message
+    error.value = err.details
+      ? Object.entries(err.details).map(([k, v]) => `${FIELD[k] ?? k}: ${[v].flat().join(', ')}`).join(' · ')
+      : err.message
   } finally {
     busy.value = false
   }
@@ -45,8 +74,10 @@ function startCreate() {
   creating.value = true
   form.value = { fullName: '', email: '', login: '', password: '', phone: '', pages: ['operations'] }
 }
-const create = () =>
-  run(async () => {
+const create = () => {
+  const problem = createProblem(form.value)
+  if (problem) return (error.value = problem)
+  return run(async () => {
     const f = form.value
     await createAccount({
       fullName: f.fullName.trim(),
@@ -60,10 +91,13 @@ const create = () =>
   }, form.value.login.trim()
     ? 'สร้างบัญชีแอดมินแล้ว · ส่งชื่อผู้ใช้และรหัสผ่านให้เจ้าของบัญชีทางช่องทางที่ปลอดภัย'
     : 'สร้างบัญชีแอดมินแล้ว · ให้เจ้าของบัญชีกด "ดำเนินการต่อด้วย Google" ด้วย Gmail นี้')
+}
 
 const startEdit = (a) => (editing.value = { id: a.id, pages: [...a.pages], password: '', email: a.gmail ?? '' })
-const saveEdit = () =>
-  run(async () => {
+const saveEdit = () => {
+  const problem = editProblem(editing.value)
+  if (problem) return (error.value = problem)
+  return run(async () => {
     const e = editing.value
     const a = data.value.accounts.find((x) => x.id === e.id)
     const email = e.email.trim().toLowerCase()
@@ -74,6 +108,7 @@ const saveEdit = () =>
     })
     editing.value = null
   }, 'บันทึกสิทธิ์แล้ว')
+}
 const toggleActive = (a) =>
   window.confirm(a.status === 'ACTIVE' ? `ระงับบัญชี ${a.fullName}? จะถูกออกจากระบบทันที` : `เปิดใช้บัญชี ${a.fullName} อีกครั้ง?`) &&
   run(() => updateAccount(a.id, { active: a.status !== 'ACTIVE' }), a.status === 'ACTIVE' ? 'ระงับบัญชีแล้ว' : 'เปิดใช้บัญชีแล้ว')
@@ -87,10 +122,10 @@ const time = (iso) => (iso ? new Date(iso).toLocaleString('th-TH', { day: 'numer
       <p class="lede">สร้างบัญชีให้พนักงาน กำหนดว่าเข้าหน้าไหนได้บ้าง · Super Admin เข้าได้ทุกหน้า</p>
       <button v-if="!creating" type="button" class="go" @click="startCreate"><Icon name="users" :size="15" /> เพิ่มแอดมิน</button>
     </div>
-    <p v-if="error" class="err" role="alert">{{ error }}</p>
+    <p v-if="error && !creating && !editing" class="err" role="alert">{{ error }}</p>
     <p v-if="note" class="ok" role="status">{{ note }}</p>
 
-    <form v-if="creating && data" class="card form" @submit.prevent="create">
+    <form v-if="creating && data" class="card form" novalidate @submit.prevent="create">
       <h3>บัญชีแอดมินใหม่</h3>
       <div class="g">
         <label>ชื่อ-นามสกุล<input v-model="form.fullName" required minlength="2" maxlength="120" /></label>
@@ -105,7 +140,8 @@ const time = (iso) => (iso ? new Date(iso).toLocaleString('th-TH', { day: 'numer
         <label v-for="(t, k) in data.pages" :key="k" class="chk"><input v-model="form.pages" type="checkbox" :value="k" /> {{ t }}</label>
       </fieldset>
       <div class="btns">
-        <button type="submit" class="go" :disabled="busy || !form.pages.length">สร้างบัญชี</button>
+        <p v-if="error" class="err" role="alert">{{ error }}</p>
+        <button type="submit" class="go" :disabled="busy">{{ busy ? 'กำลังสร้าง…' : 'สร้างบัญชี' }}</button>
         <button type="button" class="ghost" @click="creating = false">ยกเลิก</button>
       </div>
     </form>
@@ -131,7 +167,7 @@ const time = (iso) => (iso ? new Date(iso).toLocaleString('th-TH', { day: 'numer
           <button type="button" class="ghost" @click="startEdit(a)">แก้สิทธิ์ / Gmail / รหัสผ่าน</button>
           <button type="button" class="ghost" @click="toggleActive(a)">{{ a.status === 'ACTIVE' ? 'ระงับ' : 'เปิดใช้' }}</button>
         </div>
-        <form v-if="editing?.id === a.id" class="edit" @submit.prevent="saveEdit">
+        <form v-if="editing?.id === a.id" class="edit" novalidate @submit.prevent="saveEdit">
           <fieldset>
             <legend>หน้าที่เข้าได้</legend>
             <label v-for="(t, k) in data.pages" :key="k" class="chk"><input v-model="editing.pages" type="checkbox" :value="k" /> {{ t }}</label>
@@ -139,7 +175,8 @@ const time = (iso) => (iso ? new Date(iso).toLocaleString('th-TH', { day: 'numer
           <label class="pw">Gmail (เข้าสู่ระบบด้วย Google)<input v-model="editing.email" type="email" maxlength="254" autocomplete="off" placeholder="เช่น mint@gmail.com" /></label>
           <label v-if="a.login" class="pw">ตั้งรหัสผ่านใหม่ (เว้นว่างถ้าไม่เปลี่ยน)<input v-model="editing.password" type="password" minlength="8" autocomplete="new-password" /></label>
           <div class="btns">
-            <button type="submit" class="go" :disabled="busy || !editing.pages.length">บันทึก</button>
+            <p v-if="error" class="err" role="alert">{{ error }}</p>
+            <button type="submit" class="go" :disabled="busy">บันทึก</button>
             <button type="button" class="ghost" @click="editing = null">ยกเลิก</button>
           </div>
         </form>
@@ -223,7 +260,13 @@ small {
 .acts,
 .btns {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
+}
+/* what is wrong sits right above the save button, where a phone user is looking */
+.btns .err {
+  flex-basis: 100%;
+  margin: 0;
 }
 .go,
 .ghost {
