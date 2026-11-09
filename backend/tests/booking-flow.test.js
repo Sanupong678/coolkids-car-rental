@@ -251,6 +251,7 @@ describe("dispatch: calendar, drivers and the printable contract", () => {
     const res = await customer.post("/api/v1/bookings").set("Origin", ORIGIN).send(bookingBody({
       pickupAt, returnAt: inDays(10, 4), fulfillment: "DELIVERY",
       delivery: { address: "Central World, Bangkok", lat: 13.7466, lng: 100.5393 },
+      returnType: "SAME_AS_DELIVERY", // staff drive out twice: deliver the car, then collect it
     })).expect(201);
     bookingId = res.body.data.id;
     const number = res.body.data.number;
@@ -307,6 +308,10 @@ describe("dispatch: calendar, drivers and the printable contract", () => {
     assert.equal(p.renter.idMasked, "1234567890123");
     assert.equal(p.rental.fulfillment, "DELIVERY");
     assert.equal(p.money.totalMinor, p.money.rentalMinor + p.money.deliveryMinor - p.money.discountMinor);
+    // the one delivery box counts both trips (e.g. 300 out + 300 back = 600, not 300)
+    const { rows: fees } = await pool.query("SELECT item_type, amount_minor FROM booking_items WHERE booking_id = $1 AND item_type IN ('DELIVERY_FEE', 'RETURN_FEE')", [bookingId]);
+    assert.equal(fees.length, 2, "a delivery and a collection fee");
+    assert.equal(p.money.deliveryMinor, fees.reduce((n, f) => n + Number(f.amount_minor), 0));
     assert.equal(p.signature, null, "LINE bookings are signed on paper at pick-up");
     await customer.get(`/api/v1/admin/bookings/${bookingId}/contract-print`).expect(403);
   });

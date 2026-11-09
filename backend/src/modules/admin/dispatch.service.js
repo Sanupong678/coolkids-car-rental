@@ -313,7 +313,8 @@ export async function contractPrint(bookingId, round = null) {
             ct.signature_media_id, ct.created_at AS contract_created_at,
             -- each line with its staff adjustments (booking_items is append-only)
             (SELECT COALESCE(sum(amount_minor), 0) FROM booking_items WHERE booking_id = b.id AND COALESCE(adjusts, item_type) = 'RENTAL') AS rental_minor,
-            (SELECT COALESCE(sum(amount_minor), 0) FROM booking_items WHERE booking_id = b.id AND COALESCE(adjusts, item_type) = 'DELIVERY_FEE') AS delivery_minor,
+            -- the agreement's one delivery box covers both trips: delivering the car and collecting it
+            (SELECT COALESCE(sum(amount_minor), 0) FROM booking_items WHERE booking_id = b.id AND COALESCE(adjusts, item_type) IN ('DELIVERY_FEE', 'RETURN_FEE')) AS delivery_minor,
             (SELECT COALESCE(-sum(amount_minor), 0) FROM booking_items WHERE booking_id = b.id AND COALESCE(adjusts, item_type) = 'DISCOUNT') AS discount_minor
        FROM bookings b
        JOIN vehicles v ON v.id = b.vehicle_id
