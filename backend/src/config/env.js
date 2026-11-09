@@ -28,7 +28,7 @@ const schema = z.object({
   STAFF_SESSION_DAYS: z.coerce.number().int().positive().default(7),
   // A session unused for this long is revoked and its cookie cleared → sign in again.
   STAFF_IDLE_HOURS: z.coerce.number().positive().default(168),
-  CUSTOMER_IDLE_HOURS: z.coerce.number().positive().default(72),
+  CUSTOMER_IDLE_HOURS: z.coerce.number().positive().default(168),
 
   GOOGLE_CLIENT_ID: z.string().default(""),
   GOOGLE_CLIENT_SECRET: z.string().default(""),
