@@ -261,6 +261,8 @@ export async function createBooking(auth, input, ctx, opts = {}) {
     async (db) => {
       const v = await findVehicleForBooking(db, input.vehicleSlug);
       if (!v) throw NotFound("Vehicle");
+      // LINE-only cars (partner fleets): the customer asks in LINE chat and staff key the booking in.
+      if (!v.book_on_web && !opts.staff) throw Conflict("BOOK_VIA_ADMIN", "รถคันนี้จองผ่านแอดมินทาง LINE เท่านั้น");
       const { days, money } = priceFor(v, c, settings, pickupAt, returnAt, places);
       const userId = auth.user.id;
       if (input.replaces) await dropDraft(db, input.replaces, opts.staff ? null : userId);

@@ -11,6 +11,11 @@ const cache = (seconds) => (_req, res, next) => {
   next();
 };
 
+const revalidate = (_req, res, next) => {
+  res.set("Cache-Control", "no-cache");
+  next();
+};
+
 const slugParam = z.object({ slug: z.string().regex(/^[a-z0-9-]+$/).max(120) });
 
 export function catalogueRoutes() {
@@ -36,7 +41,9 @@ export function catalogueRoutes() {
     res.json(await service.listVehicles(req.valid.query));
   });
 
-  router.get("/vehicles/:slug", cache(60), validate({ params: slugParam }), async (req, res) => {
+  // The car page decides between "จองเลย" and the LINE-only button from this, so the
+  // browser re-checks it every time (a cheap 304 via the ETag): staff edits show at once.
+  router.get("/vehicles/:slug", revalidate, validate({ params: slugParam }), async (req, res) => {
     res.json({ data: await service.getVehicle(req.valid.params.slug) });
   });
 

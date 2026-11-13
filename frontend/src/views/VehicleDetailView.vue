@@ -6,6 +6,7 @@ import { useSiteStore } from '@/stores/site'
 import { useAuthStore } from '@/stores/auth'
 import { label, money, srcset } from '@/utils/format'
 import { useI18n } from '@/i18n'
+import { lineChatUrl, lineOnly } from '@/utils/lineChat'
 import Icon from '@/components/ui/Icon.vue'
 import AvailabilityCalendar from '@/components/booking/AvailabilityCalendar.vue'
 import BookingModal from '@/components/booking/BookingModal.vue'
@@ -107,6 +108,9 @@ const cropStyle = computed(() =>
 )
 const daily = computed(() => v.value?.price.discountedDailyMinor ?? v.value?.price.dailyMinor)
 const line = computed(() => site.content?.contact?.line)
+// LINE-only car: no "จอง" button or calendar, just a LINE chat with the inquiry typed in
+const viaAdmin = computed(() => lineOnly(v.value))
+const askLine = computed(() => lineChatUrl(site.content?.contact, v.value))
 const thumbs = computed(() => others.value.slice(0, 3))
 // credits.json is keyed by the image file name: /cars/<key>-1200.webp
 const credit = computed(() => {
@@ -215,6 +219,7 @@ function continueBooking() {
   openBooking()
 }
 function openBooking() {
+  if (viaAdmin.value) return
   if (!auth.isSignedIn) {
     auth.promptLogin({ returnTo: router.resolve({ query: { ...route.query, book: '1' } }).fullPath })
     return
@@ -229,7 +234,7 @@ function closeBooking(b) {
 watch(
   () => [route.query.book, v.value, auth.isSignedIn],
   ([book, loaded, signedIn]) => {
-    if (book && loaded && signedIn) booking.value = true
+    if (book && loaded && signedIn && !lineOnly(loaded)) booking.value = true
   },
   { immediate: true },
 )
@@ -252,7 +257,7 @@ watch(
           <button type="button" :class="{ on: isFav }" :aria-pressed="isFav" :aria-label="t(isFav ? 'car.unfav' : 'car.fav')" @click="toggleFav">
             <Icon name="heart" :size="18" />
           </button>
-          <button type="button" :aria-label="t('car.availability')" @click="sheet = true"><Icon name="calendar" :size="18" /></button>
+          <button v-if="!viaAdmin" type="button" :aria-label="t('car.availability')" @click="sheet = true"><Icon name="calendar" :size="18" /></button>
           <button type="button" :aria-label="t('car.share')" @click="share"><Icon :name="copied ? 'check' : 'share'" :size="18" /></button>
         </div>
 
@@ -310,8 +315,11 @@ watch(
           <strong>{{ money(daily, v.price.currency) }}</strong><span>{{ t('car.perDay') }}</span>
           <small>{{ t('car.sv.deposit') }} {{ money(v.price.depositMinor, v.price.currency) }}</small>
         </p>
-        <a v-if="line" :href="line" target="_blank" rel="noopener" class="p-line" :aria-label="t('car.bookLine')">LINE</a>
-        <button type="button" class="p-book" @click="sheet = true">{{ t('car.book') }}</button>
+        <a v-if="viaAdmin" :href="askLine" target="_blank" rel="noopener" class="p-book p-ask">{{ t('car.bookLine') }}</a>
+        <template v-else>
+          <a v-if="line" :href="line" target="_blank" rel="noopener" class="p-line" :aria-label="t('car.bookLine')">LINE</a>
+          <button type="button" class="p-book" @click="sheet = true">{{ t('car.book') }}</button>
+        </template>
       </div>
     </section>
 
@@ -343,7 +351,7 @@ watch(
             <button v-for="x in tabs" :key="x.key" type="button" :class="{ on: tab === x.key }" @click="tab = x.key">
               <Icon :name="x.icon" :size="15" /> {{ x.label }}
             </button>
-            <a href="#availability" class="pill">{{ t('car.availability') }}</a>
+            <a v-if="!viaAdmin" href="#availability" class="pill">{{ t('car.availability') }}</a>
           </nav>
           <RouterLink :to="{ name: 'vehicles' }" class="square" :aria-label="t('car.allCars')"><Icon name="sliders" :size="16" /></RouterLink>
         </header>
@@ -481,15 +489,18 @@ watch(
             <strong>{{ money(daily, v.price.currency) }}</strong>
             <small>{{ t('car.perDayDeposit', { deposit: money(v.price.depositMinor, v.price.currency) }) }}</small>
           </div>
-          <a v-if="line" :href="line" target="_blank" rel="noopener" class="line">LINE</a>
-          <button type="button" class="book" @click="openBooking">{{ t('car.book') }}</button>
+          <a v-if="viaAdmin" :href="askLine" target="_blank" rel="noopener" class="book ask">{{ t('car.bookLine') }}</a>
+          <template v-else>
+            <a v-if="line" :href="line" target="_blank" rel="noopener" class="line">LINE</a>
+            <button type="button" class="book" @click="openBooking">{{ t('car.book') }}</button>
+          </template>
         </footer>
       </div>
       <p class="desc">{{ carDesc(v) }}</p>
     </section>
 
     <!-- Availability -->
-    <section id="availability" class="section avail">
+    <section v-if="!viaAdmin" id="availability" class="section avail">
       <div class="container">
         <div v-reveal class="section-head">
           <h2>{{ t('car.pickDates') }}</h2>
@@ -994,6 +1005,15 @@ h1 {
 .book:hover {
   background: #111;
 }
+.book.ask {
+  display: inline-flex;
+  align-items: center;
+  background: #06c755;
+  color: #fff;
+}
+.book.ask:hover {
+  background: #05a648;
+}
 .line {
   display: inline-flex;
   align-items: center;
@@ -1477,6 +1497,11 @@ h1 {
   font-size: var(--fs-sm);
   font-weight: 600;
   cursor: pointer;
+}
+.p-ask {
+  display: grid;
+  place-items: center;
+  background: #06c755;
 }
 .p-book.wide {
   width: 100%;

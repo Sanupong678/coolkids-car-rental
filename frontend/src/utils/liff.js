@@ -46,3 +46,21 @@ export async function liffSignIn(liffId) {
     return false
   }
 }
+
+/**
+ * Sends a text into the chat with the Official Account as the customer, then closes the
+ * LIFF window (needs the chat_message.write scope). Resolves false outside the LINE app or
+ * when LINE refuses, so the caller can open the chat link instead.
+ */
+export async function liffSendText(text) {
+  const liff = await (ready ?? Promise.resolve(null))
+  if (!liff?.isInClient?.()) return false
+  try {
+    await liff.sendMessages([{ type: 'text', text }])
+    liff.closeWindow()
+    return true
+  } catch (err) {
+    console.warn('LIFF sendMessages failed', err)
+    return false
+  }
+}

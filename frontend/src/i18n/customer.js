@@ -457,6 +457,10 @@ const S = {
     estimate: ['{n} วัน · ประมาณ {price}', '{n} days · about {price}', '{n} 天 · 约 {price}'],
     noDates: ['ยังไม่ได้เลือกวัน', 'No dates chosen yet', '尚未选择日期'],
     continue: ['ดำเนินการต่อ', 'Continue', '继续'],
+    askTitle: ['จองรถคันนี้กับแอดมิน', 'Book this car with our team', '通过客服预订此车'],
+    askLead: ['แอดมินจะเช็คคิวรถให้ตามวันที่คุณต้องการ แล้วยืนยันการจองให้ทาง LINE', 'Our team checks the car for your dates and confirms the booking with you on LINE.', '客服将按您需要的日期确认车辆，并通过 LINE 为您确认预订。'],
+    askHint: ['แจ้งวันรับ–คืนรถในแชทได้เลย', 'Tell us your pick-up and return days in the chat', '请在聊天中告知取车和还车日期'],
+    askButton: ['ส่งข้อความถึงแอดมิน', 'Message our team', '联系客服'],
   },
   // Thai CMS text (banner, footer links) → its translation, used through tx().
   cms: {

@@ -1,6 +1,6 @@
 import { pool, withTransaction } from "../../db/pool.js";
 import { backgroundRemovalAvailable } from "../../shared/remove-bg.js";
-import { Conflict, Forbidden, NotFound } from "../../shared/errors.js";
+import { BadRequest, Conflict, Forbidden, NotFound } from "../../shared/errors.js";
 import * as storage from "../../shared/storage.js";
 import { feePolicy, getSettings } from "../../shared/settings.js";
 import { recordAudit } from "../audit/audit.service.js";
@@ -17,6 +17,7 @@ const COLUMNS = {
   dailyRateMinor: "daily_rate_minor", hourlyRateMinor: "hourly_rate_minor", depositMinor: "deposit_minor",
   minRentalDays: "min_rental_days", maxRentalDays: "max_rental_days", minDriverAge: "min_driver_age",
   status: "status", isFeatured: "is_featured",
+  bookOnWeb: "book_on_web", bookOnLine: "book_on_line",
   fleetNo: "fleet_no",
   deliveryFreeKm: "delivery_free_km", deliveryPerKmMinor: "delivery_per_km_minor", deliveryMinFeeMinor: "delivery_min_fee_minor",
 };
@@ -46,7 +47,7 @@ const dto = (r) => ({
   torqueNm: r.torque_nm, fuelEconomy: r.fuel_economy_l_100km != null ? Number(r.fuel_economy_l_100km) : null, rangeKm: r.range_km,
   currency: r.currency, dailyRateMinor: r.daily_rate_minor, hourlyRateMinor: r.hourly_rate_minor, depositMinor: r.deposit_minor,
   minRentalDays: r.min_rental_days, maxRentalDays: r.max_rental_days, minDriverAge: r.min_driver_age,
-  status: r.status, isFeatured: r.is_featured, imageUrl: r.image_url, images: r.images, features: r.features,
+  status: r.status, isFeatured: r.is_featured, bookOnWeb: r.book_on_web, bookOnLine: r.book_on_line, imageUrl: r.image_url, images: r.images, features: r.features,
   // null = the shop default delivery fee
   deliveryFreeKm: r.delivery_free_km != null ? Number(r.delivery_free_km) : null,
   deliveryPerKmMinor: r.delivery_per_km_minor, deliveryMinFeeMinor: r.delivery_min_fee_minor,
@@ -140,12 +141,20 @@ async function setFeatures(db, vehicleId, codes) {
   );
 }
 
+// A car must be bookable somewhere: the website, LINE, or both.
+function assertChannel(web, line) {
+  if (web === false && line === false) {
+    throw BadRequest("Pick at least one booking channel", { bookOnLine: ["เลือกอย่างน้อย 1 ช่องทาง (เว็บไซต์ หรือ LINE)"] });
+  }
+}
+
 function assertPricePermission(auth, input) {
   if (PRICE_FIELDS.some((f) => f in input) && !auth.permissions.has("vehicles:price")) throw Forbidden("You cannot change prices");
 }
 
 export async function create(auth, input, ctx) {
   assertPricePermission(auth, input);
+  assertChannel(input.bookOnWeb ?? true, input.bookOnLine ?? true);
   return withTransaction(
     async (db) => {
       const catId = await categoryId(db, input.categorySlug);
@@ -194,6 +203,7 @@ export async function update(auth, id, input, ctx) {
     async (db) => {
       const before = await get(id, db);
       if (before.archived) throw NotFound("Vehicle");
+      assertChannel(input.bookOnWeb ?? before.bookOnWeb, input.bookOnLine ?? before.bookOnLine);
       const set = ["updated_by = $2"];
       const params = [id, auth.user.id];
       for (const [k, col] of Object.entries(COLUMNS)) {

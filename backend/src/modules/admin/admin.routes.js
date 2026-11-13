@@ -55,6 +55,9 @@ const vehicleBase = z.object({
   minDriverAge: z.number().int().min(16).max(99),
   status: z.enum(["DRAFT", "ACTIVE", "MAINTENANCE", "OUT_OF_SERVICE"]),
   isFeatured: z.boolean(),
+  // Where customers may book it; LINE only = staff key the booking in (at least one).
+  bookOnWeb: z.boolean().optional(),
+  bookOnLine: z.boolean().optional(),
   imageUrl: z.string().regex(/^\/(uploads|cars)\/[\w./-]+$/).optional(),
   // The whole photo set in display order; the first one is the cover. Replaces imageUrl when sent.
   images: z.array(z.string().regex(/^\/(uploads|cars)\/[\w./-]+$/)).max(20)

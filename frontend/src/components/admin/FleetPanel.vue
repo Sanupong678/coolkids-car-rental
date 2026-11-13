@@ -31,6 +31,8 @@ const EMPTY = {
   description: '', transmission: 'AUTOMATIC', fuel: 'PETROL', drive: 'FWD', seats: 5, doors: 4, luggageLiters: null,
   engineCc: null, powerHp: null, torqueNm: null, fuelEconomy: null, daily: 1000, hourly: null, deposit: 5000,
   minRentalDays: 1, maxRentalDays: null, minDriverAge: 21, status: 'DRAFT', isFeatured: false, images: [], features: [],
+  // Where customers may book it. LINE only: no "จอง" button, customers ask the admin in LINE chat.
+  bookOnWeb: true, bookOnLine: true,
   // Delivery fee for this car in baht; empty = shop default.
   deliveryFreeKm: null, deliveryPerKm: null, deliveryMinFee: null,
   fleetNo: null, // "#3" on the operations board and booking timeline; empty = next number
@@ -58,6 +60,7 @@ function payload(f) {
     hourlyRateMinor: f.hourly ? Math.round(num(f.hourly) * 100) : null, depositMinor: Math.round(num(f.deposit) * 100),
     minRentalDays: num(f.minRentalDays), maxRentalDays: num(f.maxRentalDays), minDriverAge: num(f.minDriverAge),
     status: f.status, isFeatured: f.isFeatured, features: f.features,
+    bookOnWeb: f.bookOnWeb, bookOnLine: f.bookOnLine,
     fleetNo: num(f.fleetNo),
     deliveryFreeKm: num(f.deliveryFreeKm),
     deliveryPerKmMinor: num(f.deliveryPerKm) == null ? null : Math.round(num(f.deliveryPerKm) * 100),
@@ -93,6 +96,7 @@ const problems = computed(() => {
   else if (f.licensePlate.trim().length < 2 || f.licensePlate.trim().length > 20) add('licensePlate', 'ทะเบียน 2–20 ตัวอักษร')
   range('fleetNo', f.fleetNo, 1, 9999)
   if (blank(f.categorySlug)) add('categorySlug', 'เลือกประเภทรถ')
+  if (!f.bookOnWeb && !f.bookOnLine) add('bookOnLine', 'เลือกอย่างน้อย 1 ช่องทาง (เว็บไซต์ หรือ LINE)')
   range('daily', f.daily, 1, 1_000_000, { int: false, required: true, name: 'ราคาต่อวัน' })
   range('hourly', f.hourly, 0.01, 1_000_000, { int: false })
   range('deposit', f.deposit, 0, 1_000_000, { int: false, required: true, name: 'เงินประกัน (ใส่ 0 ได้)' })
@@ -120,7 +124,7 @@ const FROM_API = { dailyRateMinor: 'daily', hourlyRateMinor: 'hourly', depositMi
 
 async function scrollToFirstProblem() {
   await nextTick()
-  document.querySelector('.drawer label.bad')?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+  document.querySelector('.drawer .bad')?.scrollIntoView({ block: 'center', behavior: 'smooth' })
 }
 
 async function save() {
@@ -229,7 +233,7 @@ const STATUS_CLASS = { ACTIVE: 'ok', DRAFT: 'muted', MAINTENANCE: 'warn', OUT_OF
             <td data-label="ประเภท">{{ c.categoryName }}</td>
             <td class="num" data-label="ราคา/วัน">{{ money(c.dailyRateMinor, c.currency) }}</td>
             <td class="num" data-label="มัดจำ">{{ money(c.depositMinor, c.currency) }}</td>
-            <td data-label="สถานะ"><span class="pill" :class="STATUS_CLASS[c.status]">{{ STATUSES.find((s) => s[0] === c.status)?.[1] ?? c.status }}</span><span v-if="c.isFeatured" class="star" title="รถแนะนำ">★</span></td>
+            <td data-label="สถานะ"><span class="pill" :class="STATUS_CLASS[c.status]">{{ STATUSES.find((s) => s[0] === c.status)?.[1] ?? c.status }}</span><span v-if="c.isFeatured" class="star" title="รถแนะนำ">★</span><span v-if="!c.bookOnWeb" class="pill line-only" title="จองผ่านแอดมินทาง LINE เท่านั้น">LINE เท่านั้น</span><span v-else-if="!c.bookOnLine" class="pill muted" title="ไม่แสดงในรายการรถของ LINE">เว็บเท่านั้น</span></td>
             <td class="num" data-label="งานค้าง">{{ c.openBookings }}</td>
             <td class="edit-cell"><button type="button" class="edit" @click="edit(c)">แก้ไข</button></td>
           </tr>
@@ -310,6 +314,20 @@ const STATUS_CLASS = { ACTIVE: 'ok', DRAFT: 'muted', MAINTENANCE: 'warn', OUT_OF
             <label class="full"><span>คำอธิบาย</span><textarea v-model="editing.description" rows="3" maxlength="2000" /></label>
           </section>
 
+          <section class="channels" :class="{ bad: bad('bookOnLine') }">
+            <h4>ช่องทางการจอง</h4>
+            <p class="hint">ลูกค้าจองรถคันนี้ผ่านช่องทางไหนได้บ้าง (เลือกอย่างน้อย 1)</p>
+            <div class="feats">
+              <label class="chk"><input v-model="editing.bookOnWeb" type="checkbox" /> เว็บไซต์ <small>— ลูกค้าเลือกวันและจองเองได้</small></label>
+              <label class="chk"><input v-model="editing.bookOnLine" type="checkbox" /> LINE <small>— แสดงในรายการรถของ LINE</small></label>
+            </div>
+            <p v-if="editing.bookOnLine && !editing.bookOnWeb" class="hint note">
+              LINE เท่านั้น: หน้าเว็บแสดงรถตามปกติแต่มีแค่ปุ่ม LINE ไม่มีปุ่มจองและปฏิทิน · ใน LINE ปุ่ม "จองคันนี้ / เลือกวัน"
+              จะส่งข้อความ "สอบถามรายละเอียดการจองรถ …" ถึงแอดมิน แล้วแอดมินเพิ่มการจองให้ลูกค้าจากหลังบ้าน
+            </p>
+            <em v-if="bad('bookOnLine')" class="why">{{ problems.bookOnLine }}</em>
+          </section>
+
           <section>
             <h4>ราคาและเงื่อนไข</h4>
             <div class="g3">
@@ -371,6 +389,18 @@ const STATUS_CLASS = { ACTIVE: 'ok', DRAFT: 'muted', MAINTENANCE: 'warn', OUT_OF
 </template>
 
 <style scoped>
+.channels small {
+  color: var(--viz-muted);
+  font-weight: 400;
+}
+.channels .note {
+  margin: 8px 0 0;
+}
+.pill.line-only {
+  margin-left: 6px;
+  background: #06c755;
+  color: #fff;
+}
 .hint {
   margin: -4px 0 8px;
   color: var(--viz-muted);

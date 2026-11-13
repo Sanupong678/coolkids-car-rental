@@ -62,6 +62,8 @@ export const vehicleCardDto = (row) => ({
   promotion: promotionDto(row),
   minRentalDays: row.min_rental_days,
   isFeatured: row.is_featured,
+  // web: customers book it themselves · line: in the LINE car list. LINE only = ask the admin.
+  booking: { web: row.book_on_web, line: row.book_on_line },
 });
 
 export async function listVehicles(filters) {

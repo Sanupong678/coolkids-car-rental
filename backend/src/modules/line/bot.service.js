@@ -51,14 +51,22 @@ const uriButton = (label, uri, style = "primary") => ({
   type: "button", style, height: "sm", ...(style === "primary" ? { color: RED } : {}), action: { type: "uri", label, uri },
 });
 
+/** What the customer sends the shop for a car booked through the admin (LINE only). */
+export const inquiryText = (v) => `สอบถามรายละเอียดการจองรถ ${[v.brand, v.model, v.trim, v.year].filter(Boolean).join(" ")}`;
+
 function carBubble(v) {
   const daily = v.price.discountedDailyMinor ?? v.price.dailyMinor;
   const img = lineImage(v.image);
+  // Bookable on the site: open the calendar (LIFF). LINE only: the tap sends the shop a
+  // chat message as the customer, and staff answer in LINE OA Manager (the bot stays quiet).
+  const action = v.booking?.web
+    ? { type: "uri", label: "จองคันนี้ / เลือกวัน", uri: liffUrl(`/book/${v.slug}`) }
+    : { type: "message", label: "จองคันนี้ / เลือกวัน", text: inquiryText(v) };
   return {
     type: "bubble",
     size: "kilo",
     // "fit" on a light ground: the whole car shows (cover cropped the nose and tail)
-    ...(img ? { hero: { type: "image", url: img, size: "full", aspectRatio: "20:13", aspectMode: "fit", backgroundColor: "#F2F3F5", action: { type: "uri", uri: liffUrl(`/book/${v.slug}`) } } } : {}),
+    ...(img ? { hero: { type: "image", url: img, size: "full", aspectRatio: "20:13", aspectMode: "fit", backgroundColor: "#F2F3F5", action } } : {}),
     body: {
       type: "box", layout: "vertical", spacing: "sm",
       contents: [
@@ -76,12 +84,14 @@ function carBubble(v) {
         text(`${v.specs.seats} ที่นั่ง · ${TRANSMISSION[v.specs.transmission] ?? v.specs.transmission} · มัดจำ ${baht(v.price.depositMinor)}`, { size: "xs", color: "#666666" }),
       ],
     },
-    footer: { type: "box", layout: "vertical", spacing: "sm", contents: [uriButton("จองคันนี้ / เลือกวัน", liffUrl(`/book/${v.slug}`))] },
+    footer: { type: "box", layout: "vertical", spacing: "sm", contents: [{ type: "button", style: "primary", height: "sm", color: RED, action }] },
   };
 }
 
 async function carsMessage() {
-  const { data } = await catalogue.listVehicles(vehicleListQuery.parse({ pageSize: 11 }));
+  // A carousel holds 12 bubbles: 11 cars + "ดูรถทั้งหมด". Website-only cars stay out of LINE.
+  const { data: all } = await catalogue.listVehicles(vehicleListQuery.parse({ pageSize: 48 }));
+  const data = all.filter((v) => v.booking.line).slice(0, 11);
   if (!data.length) return { type: "text", text: "ขออภัย ตอนนี้ยังไม่มีรถว่างในระบบ ติดต่อแอดมินได้เลยครับ" };
   const more = {
     type: "bubble", size: "kilo",

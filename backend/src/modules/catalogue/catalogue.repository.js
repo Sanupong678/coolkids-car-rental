@@ -37,7 +37,7 @@ const PRIMARY_IMAGE = `
 const CARD_COLUMNS = `
   v.id, v.slug, v.brand, v.model, v.trim, v.model_year, v.transmission, v.fuel_type, v.drive_type,
   v.seats, v.doors, v.luggage_liters, v.power_hp, v.range_km, v.currency, v.daily_rate_minor,
-  v.deposit_minor, v.min_rental_days, v.is_featured,
+  v.deposit_minor, v.min_rental_days, v.is_featured, v.book_on_web, v.book_on_line,
   c.slug AS category_slug, c.name AS category_name,
   img.file_url AS image_url, img.variants AS image_variants, img.alt_text AS image_alt,
   p.id AS promo_id, p.slug AS promo_slug, p.name AS promo_name, p.discount_type AS promo_type,

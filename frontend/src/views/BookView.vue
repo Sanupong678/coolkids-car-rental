@@ -3,6 +3,9 @@ import { computed, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { getVehicle, listVehicles } from '@/api/catalogue'
 import { useAuthStore } from '@/stores/auth'
+import { useSiteStore } from '@/stores/site'
+import { inquiryText, lineChatUrl, lineOnly } from '@/utils/lineChat'
+import { liffSendText } from '@/utils/liff'
 import { money, rentalDays } from '@/utils/format'
 import { t, intlLocale, errorText } from '@/i18n'
 import Icon from '@/components/ui/Icon.vue'
@@ -16,6 +19,8 @@ import BookingModal from '@/components/booking/BookingModal.vue'
 const route = useRoute()
 const router = useRouter()
 const auth = useAuthStore()
+const site = useSiteStore()
+site.load()
 
 const cars = ref(null)
 const car = ref(null)
@@ -43,6 +48,15 @@ async function load() {
   }
 }
 watch(slug, load, { immediate: true })
+
+// LINE-only car (booked through the admin): no calendar; the customer sends the shop the
+// inquiry in LINE chat, staff answer and key the booking in from the back office.
+const viaAdmin = computed(() => lineOnly(car.value))
+async function askAdmin() {
+  if (await liffSendText(inquiryText(car.value))) return
+  const url = lineChatUrl(site.content?.contact, car.value)
+  if (url) window.location.href = url
+}
 
 function proceed() {
   if (!selection.value) return
@@ -104,14 +118,24 @@ function closeBooking(b) {
               <RouterLink :to="{ name: 'book' }" class="change">{{ t('bv.changeCar') }}</RouterLink>
             </div>
           </section>
-          <h1>{{ t('bv.titleDates') }}</h1>
-          <p class="lead">{{ t('bv.lead') }}</p>
-          <AvailabilityCalendar :key="car.slug" :slug="car.slug" @select="selection = $event" />
+          <template v-if="viaAdmin">
+            <h1>{{ t('bv.askTitle') }}</h1>
+            <p class="lead">{{ t('bv.askLead') }}</p>
+          </template>
+          <template v-else>
+            <h1>{{ t('bv.titleDates') }}</h1>
+            <p class="lead">{{ t('bv.lead') }}</p>
+            <AvailabilityCalendar :key="car.slug" :slug="car.slug" @select="selection = $event" />
+          </template>
         </template>
       </template>
     </div>
 
-    <footer v-if="slug && car" class="bar">
+    <footer v-if="slug && car && viaAdmin" class="bar">
+      <div class="sum"><small>{{ t('bv.askHint') }}</small></div>
+      <button type="button" class="btn btn-pill ask" @click="askAdmin">{{ t('bv.askButton') }}</button>
+    </footer>
+    <footer v-else-if="slug && car" class="bar">
       <div class="sum">
         <template v-if="selection">
           <strong>{{ fmtDay(selection.from) }} → {{ fmtDay(selection.to) }}</strong>
@@ -127,6 +151,10 @@ function closeBooking(b) {
 </template>
 
 <style scoped>
+.ask {
+  background: #06c755;
+  color: #fff;
+}
 .book {
   min-height: 100dvh;
   padding: 84px var(--gutter) 140px;
