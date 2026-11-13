@@ -1,6 +1,6 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { acceptJob, assignDriver, getDispatchCalendar, getDispatchStaff, getDispatchSummary, getOverview, setBookingStatus } from '@/api/admin'
+import { acceptJob, assignDriver, getDispatchCalendar, getDispatchStaff, getDispatchSummary, getOverview, getVisitors, setBookingStatus } from '@/api/admin'
 import { useAuthStore } from '@/stores/auth'
 import { money } from '@/utils/format'
 import { distanceKm, fmtKm } from '@/utils/geo'
@@ -67,7 +67,10 @@ const dispatchError = ref('')
 
 async function loadSummary() {
   summary.value = await getDispatchSummary().catch(() => summary.value)
+  visitors.value = await getVisitors().catch(() => visitors.value)
 }
+// website visitors so far today / this month / this year (top-right of the today card)
+const visitors = ref(null)
 async function loadCalendar() {
   calLoading.value = true
   try {
@@ -265,6 +268,9 @@ const mins = (v) => (v == null ? '—' : `${Math.round(v)} นาที`)
   <div class="dash">
     <!-- today -->
     <section class="hero">
+      <span v-if="visitors" class="visitors" title="จำนวนคนเข้าชมเว็บไซต์ วันนี้ / เดือนนี้ / ปีนี้">
+        <Icon name="eye" :size="12" />D{{ visitors.day }}/M{{ visitors.month }}/Y{{ visitors.year }}
+      </span>
       <div class="hero-title">
         <span class="eyebrow">วันนี้</span>
         <h2>งานส่งรถ<br />และรายได้</h2>
@@ -416,7 +422,24 @@ const mins = (v) => (v == null ? '—' : `${Math.round(v)} นาที`)
   gap: 16px;
 }
 /* ---- hero: big numbers on one glass slab */
+.hero .visitors {
+  position: absolute;
+  top: 12px;
+  right: 16px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: rgb(255 255 255 / 0.08);
+  color: var(--viz-muted, #aaa);
+  font-size: 0.72rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+}
 .hero {
+  position: relative;
   display: grid;
   grid-template-columns: minmax(180px, 1.1fr) auto repeat(3, minmax(0, 1fr));
   align-items: center;

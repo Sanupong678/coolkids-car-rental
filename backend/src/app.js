@@ -1,3 +1,4 @@
+import { visitRoutes } from "./modules/analytics/visits.js";
 import express from "express";
 import cors from "cors";
 import helmet from "helmet";
@@ -105,6 +106,7 @@ export function createApp({
   api.use("/", bookingRoutes()); // /bookings, /delivery/quote, /maps, /payments/mock
   api.use("/webhooks", webhookRoutes());
   api.use("/webhooks", lineWebhookRoutes());
+  api.use("/", visitRoutes()); // /visits: the dashboard's visitor counter
   api.use("/admin", adminRoutes());
   // LINE look-alike demo (/line-demo): developer machines only, never in production.
   if (config.devToolsEnabled) api.use("/dev/line", lineDemoRoutes()); // never on a public host, whatever NODE_ENV says

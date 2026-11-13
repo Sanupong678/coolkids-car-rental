@@ -29,6 +29,7 @@ export async function uploadImage(file, { removeBg = false } = {}) {
 }
 
 // Dispatch: month calendar, drivers and their live position, printable contract.
+export const getVisitors = () => api('/admin/analytics/visitors').then((r) => r.data)
 export const getDispatchSummary = () => api('/admin/dispatch/summary').then((r) => r.data)
 export const getDispatchCalendar = (month) => api(`/admin/dispatch/calendar?month=${month}`).then((r) => r.data)
 export const getDispatchStaff = (date) => api(`/admin/dispatch/staff?date=${date}`).then((r) => r.data)

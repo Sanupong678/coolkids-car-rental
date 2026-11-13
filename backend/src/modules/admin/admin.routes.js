@@ -1,3 +1,4 @@
+import { visitorCounts } from "../analytics/visits.js";
 import express, { Router } from "express";
 import { createHash } from "node:crypto";
 import QRCode from "qrcode";
@@ -196,6 +197,12 @@ export function adminRoutes() {
   );
 
   // ---- dispatch: month calendar, drivers, live positions, printable contract
+  // Website visitors today / this month / this year (dashboard "D/M/Y").
+  router.get("/analytics/visitors", requirePermission(P.ANALYTICS_READ), async (_req, res) => {
+    res.set("Cache-Control", "no-store");
+    res.json({ data: await visitorCounts() });
+  });
+
   router.get("/dispatch/summary", requirePermission(P.BOOKINGS_READ), async (_req, res) => {
     res.set("Cache-Control", "no-store");
     res.json({ data: await dispatch.summary() });

@@ -4,6 +4,7 @@ import { locale, t } from '@/i18n'
 import { useAuthStore } from '@/stores/auth'
 import HomeView from '@/views/HomeView.vue'
 import { listMyBookings } from '@/api/bookings'
+import { countVisit } from '@/utils/visits'
 
 // Route-level code splitting: only the homepage ships in the entry chunk.
 const Placeholder = () => import('@/views/PlaceholderView.vue')
@@ -94,6 +95,8 @@ router.afterEach((to) => {
   const auth = useAuthStore()
   if (to.query.signin && !auth.isSignedIn) auth.promptLogin({ returnTo: String(to.query.signin) })
   setTitle(to)
+  // the dashboard's D/M/Y website visitors (customers only; staff are not counted)
+  if (!auth.isStaff && !to.meta.bare) countVisit(to.path)
 })
 
 // Tab titles follow the language too (the car page sets its own from the car's name).
