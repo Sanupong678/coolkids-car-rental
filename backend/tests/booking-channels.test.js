@@ -79,8 +79,15 @@ describe("booking channels", () => {
     assert.equal(action.type, "message");
     assert.equal(action.label, "จองคันนี้ / เลือกวัน");
     assert.match(action.text, /^สอบถามรายละเอียดการจองรถ Honda City/);
-    // the bot leaves that message to staff
-    assert.equal(await repliesFor({ type: "message", message: { type: "text", text: action.text } }), null);
+    // the bot only acknowledges it (staff answer), naming the car and asking for dates
+    const ack = await repliesFor({ type: "message", message: { type: "text", text: action.text } });
+    assert.equal(ack.length, 1);
+    assert.equal(ack[0].type, "text");
+    assert.match(ack[0].text, /^ได้รับข้อความแล้ว/);
+    assert.match(ack[0].text, /Honda City/);
+    assert.match(ack[0].text, /วัน-เวลารับรถ/);
+    // other free text is still left to staff
+    assert.equal(await repliesFor({ type: "message", message: { type: "text", text: "สวัสดีครับ" } }), null);
 
     const refused = await customer.post("/api/v1/bookings").set("Origin", ORIGIN).send(bookingBody()).expect(409);
     assert.equal(refused.body.error.code, "BOOK_VIA_ADMIN");

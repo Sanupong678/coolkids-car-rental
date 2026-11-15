@@ -58,7 +58,7 @@ function carBubble(v) {
   const daily = v.price.discountedDailyMinor ?? v.price.dailyMinor;
   const img = lineImage(v.image);
   // Bookable on the site: open the calendar (LIFF). LINE only: the tap sends the shop a
-  // chat message as the customer, and staff answer in LINE OA Manager (the bot stays quiet).
+  // chat message as the customer; the bot acknowledges it and staff answer in LINE OA Manager.
   const action = v.booking?.web
     ? { type: "uri", label: "จองคันนี้ / เลือกวัน", uri: liffUrl(`/book/${v.slug}`) }
     : { type: "message", label: "จองคันนี้ / เลือกวัน", text: inquiryText(v) };
@@ -198,8 +198,27 @@ async function reply(replyToken, messages) {
   if (!res.ok) logger.warn({ status: res.status, body: await res.text().catch(() => "") }, "LINE reply failed");
 }
 
+const INQUIRY_PREFIX = inquiryText({}).trim();
+
+/**
+ * A LINE-only car's card sends inquiryText as the customer. Staff answer it in LINE OA
+ * Manager; meanwhile the bot says the message arrived and asks for what staff will need.
+ */
+function inquiryAck(event) {
+  if (event.type !== "message" || event.message?.type !== "text") return null;
+  const t = event.message.text.trim();
+  if (!t.startsWith(INQUIRY_PREFIX)) return null;
+  const car = t.slice(INQUIRY_PREFIX.length).trim();
+  return {
+    type: "text",
+    text: `ได้รับข้อความแล้วครับ แอดมินจะเช็ควันว่าง${car ? `ของ ${car}` : ""} แล้วตอบกลับในแชทนี้โดยเร็วที่สุด\n\nแจ้งไว้ก่อนได้เลยครับ:\n• วัน-เวลารับรถ และคืนรถ\n• รับรถเองที่ร้าน หรือให้ส่งรถ (บอกสถานที่)`,
+  };
+}
+
 /** The bot's answer to one event, or null when staff should answer instead. */
 export async function repliesFor(event) {
+  const ack = inquiryAck(event);
+  if (ack) return [ack];
   const intent = intentOf(event);
   return intent && BUILD[intent] ? [await BUILD[intent]()] : null;
 }
