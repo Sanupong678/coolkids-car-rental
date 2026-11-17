@@ -61,7 +61,7 @@ async function save() {
     <form class="f-wrap" @submit.prevent="save">
       <div class="two">
         <label class="f">วันคืนรถใหม่<input v-model="day" type="date" required /></label>
-        <label class="f">เวลา<input v-model="time" type="time" step="1800" required /></label>
+        <label class="f">เวลา<input v-model="time" type="time" step="60" required /></label>
       </div>
       <label class="f">
         ค่าเช่าเพิ่ม (บาท)

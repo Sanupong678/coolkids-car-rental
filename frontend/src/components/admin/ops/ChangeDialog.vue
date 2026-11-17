@@ -166,11 +166,11 @@ const title = computed(() => (props.mode === 'addon' ? `จองเพิ่ม
         </label>
         <div v-if="kind !== 'same'" class="two">
           <label class="f">วันรับรถ<input v-model="pDay" type="date" required /></label>
-          <label class="f">เวลา<input v-model="pTime" type="time" step="1800" required /></label>
+          <label class="f">เวลา<input v-model="pTime" type="time" step="60" required /></label>
         </div>
         <div class="two">
           <label class="f">{{ kind === 'same' ? 'วันคืนรถใหม่' : 'วันคืนรถ' }}<input v-model="rDay" type="date" required /></label>
-          <label class="f">เวลา<input v-model="rTime" type="time" step="1800" required /></label>
+          <label class="f">เวลา<input v-model="rTime" type="time" step="60" required /></label>
         </div>
 
         <p v-if="quoting" class="hint">กำลังคำนวณ…</p>
