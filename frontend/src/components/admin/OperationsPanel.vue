@@ -28,6 +28,7 @@ const BUCKETS = [
   ['in_use', 'กำลังใช้งาน'],
   ['awaiting_return', 'รอรับรถคืน'],
   ['delivered', 'ส่งแล้ว'],
+  ['completed', 'งานเสร็จแล้ว'],
   ['cancelled', 'ยกเลิก'],
   ['unfinished', 'ยังกรอกไม่เสร็จ'],
   ['pending_payment', 'รอชำระเงิน'],
@@ -97,7 +98,19 @@ onMounted(() => {
 onBeforeUnmount(() => clearInterval(timer))
 watch(date, load)
 
-const rows = computed(() => data.value?.lists[bucket.value] ?? [])
+// search box: name, phone, email, booking number, plate or car (any tab, handy on "งานเสร็จแล้ว")
+const search = ref('')
+const rows = computed(() => {
+  const list = data.value?.lists[bucket.value] ?? []
+  const q = search.value.trim().toLowerCase()
+  if (!q) return list
+  const digits = q.replace(/\D/g, '')
+  return list.filter((b) => {
+    const text = [b.number, b.customer?.fullName, b.customer?.phone, b.customerEmail, b.vehicle?.plate,
+      b.vehicle?.fleetNo, b.vehicle?.brand, b.vehicle?.model].filter(Boolean).join(' ').toLowerCase()
+    return text.includes(q) || (digits.length >= 3 && (b.customer?.phone ?? '').replace(/\D/g, '').includes(digits))
+  })
+})
 
 // ---- tools on a row
 const tool = ref(null) // { kind: 'pay' | 'ledger' | 'mileage' | 'contract', booking }
@@ -202,6 +215,7 @@ const onlineBalance = (b) =>
         </button>
       </div>
       <label v-if="bucket === 'today'" class="date"><Icon name="calendar" :size="14" /><input v-model="date" type="date" /></label>
+      <label class="date search"><Icon name="search" :size="14" /><input v-model="search" type="search" placeholder="ค้นหา ชื่อ / เบอร์ / เลขจอง / ทะเบียน" /></label>
     </div>
     <p v-if="error" class="err" role="alert">{{ error }}</p>
 
@@ -315,7 +329,7 @@ const onlineBalance = (b) =>
         </div>
       </li>
     </ul>
-    <p v-else-if="data" class="none">ไม่มีรายการ</p>
+    <p v-else-if="data" class="none">{{ search.trim() ? 'ไม่พบรายการที่ค้นหา' : 'ไม่มีรายการ' }}</p>
 
     <PaymentDialog v-if="['pay', 'qr', 'ledger'].includes(tool?.kind)" :booking="tool.booking" :mode="{ pay: 'collect', qr: 'qr', ledger: 'ledger' }[tool.kind]" @close="onToolClose" />
     <ExtendDialog v-if="tool?.kind === 'extend'" :booking="tool.booking" @close="onToolClose" />
@@ -626,6 +640,17 @@ const onlineBalance = (b) =>
   border: 0;
   background: none;
   font: inherit;
+}
+.search {
+  flex: 1 1 220px;
+  max-width: 360px;
+}
+.search input {
+  width: 100%;
+  min-width: 0;
+  padding: 4px 0;
+  color: inherit;
+  outline: none;
 }
 .jobs {
   display: grid;

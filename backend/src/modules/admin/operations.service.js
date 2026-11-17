@@ -25,6 +25,8 @@ export const BUCKETS = {
   // with the renter: due back after the board's day (กำลังใช้งาน) / that day or overdue (รอรับรถคืน)
   in_use: "b.status = 'ACTIVE' AND (b.return_at AT TIME ZONE 'Asia/Bangkok')::date > $1::date",
   awaiting_return: "b.status = 'ACTIVE' AND (b.return_at AT TIME ZONE 'Asia/Bangkok')::date <= $1::date",
+  // the job is over (car back): kept for looking back at past customers and trips
+  completed: "b.status = 'COMPLETED'",
   delivered: "b.status IN ('ACTIVE','COMPLETED')",
   // a draft dropped by "แก้ไขรายละเอียด" was replaced by a new booking, not cancelled by anyone
   cancelled: `b.status IN ('CANCELLED','REFUNDED','EXPIRED') AND b.cancellation_reason IS DISTINCT FROM '${DRAFT_REPLACED}'`,
@@ -79,11 +81,11 @@ export async function board(date) {
   const counts = {};
   const lists = {};
   for (const [key, where] of Object.entries(BUCKETS)) {
-    const order = key === "delivered" || key === "cancelled" ? "b.updated_at DESC"
+    const order = key === "delivered" || key === "cancelled" || key === "completed" ? "b.updated_at DESC"
       : key === "in_use" || key === "awaiting_return" ? "b.return_at ASC" : "b.pickup_at ASC";
     const { rows } = await pool.query(
       `${LIST_SELECT} WHERE b.deleted_at IS NULL AND ${where} ${key === "today" ? "" : "AND $1::date IS NOT NULL"}
-        ORDER BY ${order} LIMIT 200`,
+        ORDER BY ${order} LIMIT ${key === "completed" ? 1000 : 200}`,
       [day],
     );
     lists[key] = rows.map((r) => ({
