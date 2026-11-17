@@ -19,8 +19,16 @@ const time = ref(part(from, { hour: '2-digit', minute: '2-digit', hourCycle: 'h2
 const until = computed(() => (day.value && time.value ? new Date(`${day.value}T${time.value}:00+07:00`) : null))
 const days = computed(() => (until.value > from ? Math.ceil((until.value - from) / 86_400_000) : 0))
 const daily = props.booking.ops?.dailyMinor ?? 0
-const typed = ref('') // baht, blank = day rate × days
-const rentMinor = computed(() => (typed.value === '' ? daily * days.value : Math.round(Number(String(typed.value).replace(/[,\s]/g, '')) * 100)))
+// The extra rent follows the days picked (day rate × days) and is shown in the box; staff
+// may type another amount, and "คิดตามราคารายวัน" puts the worked-out one back.
+const autoMinor = computed(() => daily * days.value)
+const typed = ref('') // baht as typed; '' = not touched → worked out from the days
+const manual = computed(() => typed.value !== '')
+const shown = computed({
+  get: () => (manual.value ? typed.value : (autoMinor.value / 100).toLocaleString('th-TH')),
+  set: (x) => (typed.value = x),
+})
+const rentMinor = computed(() => (manual.value ? Math.round(Number(String(typed.value).replace(/[,\s]/g, '')) * 100) : autoMinor.value))
 const round = (props.booking.ops?.extensions?.length ?? 0) + 2
 const baht = (m) => `฿${(m / 100).toLocaleString('th-TH')}`
 const fmt = (d) => d.toLocaleString('th-TH', { timeZone: tz, weekday: 'short', day: 'numeric', month: 'short', year: '2-digit', hour: '2-digit', minute: '2-digit' })
@@ -57,7 +65,11 @@ async function save() {
       </div>
       <label class="f">
         ค่าเช่าเพิ่ม (บาท)
-        <input v-model="typed" type="text" inputmode="decimal" :placeholder="`${(daily * days / 100).toLocaleString('th-TH')} (ราคารายวัน ${baht(daily)} × ${days} วัน)`" />
+        <input v-model="shown" type="text" inputmode="decimal" />
+        <small class="calc">
+          <template v-if="manual">กรอกเอง · <button type="button" class="link" @click="typed = ''">คิดตามราคารายวัน ({{ baht(daily) }} × {{ days }} วัน = {{ baht(autoMinor) }})</button></template>
+          <template v-else>ราคารายวัน {{ baht(daily) }} × {{ days }} วัน = {{ baht(autoMinor) }}</template>
+        </small>
       </label>
       <div class="sum">
         <span>ใช้ต่อ <b>{{ days }} วัน</b><template v-if="until && days"> · ถึง {{ fmt(until) }}</template></span>
@@ -108,6 +120,20 @@ async function save() {
   color: #14161f;
   font: inherit;
   font-weight: 400;
+}
+.calc {
+  color: #6b6e7a;
+  font-size: 0.78rem;
+  font-weight: 400;
+}
+.link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: #2f5fb3;
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
 }
 .sum {
   display: grid;

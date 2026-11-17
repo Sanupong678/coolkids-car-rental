@@ -1261,37 +1261,68 @@ export async function staffBookingForm(staff, number, ctx) {
   };
 }
 
+// The car can be swapped until it leaves (before hand-over / delivery).
+const SWAPPABLE = ["PENDING", "CONFIRMED", "PREPARING", "READY"];
+
+/**
+ * The booking's money if it were changed to `input` (no writes): rent and trip fees for the
+ * new dates / places / car; a different car brings its own promotion and deposit, the staff
+ * discount stays.
+ */
+async function quoteEdit(db, b, input, settings, now) {
+  const swapped = Boolean(input.vehicleSlug) && input.vehicleSlug !== b.vehicle_slug;
+  if (swapped && !SWAPPABLE.includes(b.status)) {
+    throw Conflict("CAR_ALREADY_OUT", "รถออกไปหาลูกค้าแล้ว เปลี่ยนคันไม่ได้ (ใช้ \"จองเพิ่ม\" แทน)");
+  }
+  // a pick-up time left as it was is fine even when it is long past (rental already running)
+  const samePickup = new Date(input.pickupAt).getTime() === new Date(b.pickup_at).getTime();
+  const { pickupAt: pickup, returnAt } = checkPeriod(input, settings, now, true, { keepPickup: samePickup });
+  const v = await findVehicleForBooking(db, swapped ? input.vehicleSlug : b.vehicle_slug);
+  if (!v) throw NotFound("Vehicle");
+  const places = await placeQuotes(input, v.slug);
+  const { days, money: priced } = priceFor(v, input.customer, settings, pickup, returnAt, places);
+  const lines = await priceLines(db, b.id);
+  const promo = swapped ? priced.discount : lines.promo;
+  const subtotal = priced.rental + priced.delivery + priced.returnPickup;
+  const money = totalsOf({
+    rental: priced.rental, delivery: priced.delivery, returnPickup: priced.returnPickup, promo,
+    staffDiscount: Math.min(lines.staffDiscount, subtotal - Math.min(promo, subtotal)),
+    deposit: swapped ? Number(v.deposit_minor) : Number(b.deposit_minor),
+  }, settings);
+  return { swapped, v, pickup, returnAt, places, days, priced, lines, promo, money };
+}
+
 /**
  * Staff change a booking's details in place (same number, payments and photos kept):
- * dates, pick-up / return places, renter's details. Rent and trip fees are worked out
- * again for the new dates and places (promotion, staff discount and deposit stay), the
- * car hold moves with the dates and the contract is issued again.
+ * dates, pick-up / return places, renter's details, and, before the car leaves, the car
+ * itself. Rent and trip fees are worked out again (promotion, staff discount and deposit
+ * stay unless the car changes), the car hold moves with the dates and the contract is
+ * issued again. What the customer already paid stays on the booking: the board shows
+ * what is left to collect, or what to give back.
  */
 export async function updateStaffBooking(staff, number, input, ctx) {
   const settings = await getSettings();
   const now = new Date();
   const current = await loadBooking(pool, number, staff);
   assertStaffEditable(current);
-  // a pick-up time left as it was is fine even when it is long past (rental already running)
-  const samePickup = new Date(input.pickupAt).getTime() === new Date(current.pickup_at).getTime();
-  const { pickupAt: pickup, returnAt } = checkPeriod(input, settings, now, true, { keepPickup: samePickup });
-  const places = await placeQuotes(input, current.vehicle_slug);
   const c = input.customer;
 
   await withTransaction(
     async (db) => {
       const b = await loadBooking(db, number, staff, { lock: true });
       assertStaffEditable(b);
-      const v = await findVehicleForBooking(db, b.vehicle_slug);
-      if (!v) throw NotFound("Vehicle");
-      const { days, money: priced } = priceFor(v, c, settings, pickup, returnAt, places);
-      const lines = await priceLines(db, b.id);
-      const subtotal = priced.rental + priced.delivery + priced.returnPickup;
-      const money = totalsOf({
-        rental: priced.rental, delivery: priced.delivery, returnPickup: priced.returnPickup, promo: lines.promo,
-        staffDiscount: Math.min(lines.staffDiscount, subtotal - Math.min(lines.promo, subtotal)), deposit: Number(b.deposit_minor),
-      }, settings);
-      await appendAdjustments(db, b.id, lines, money, `แก้ไขการจอง ${days} วัน`);
+      const { swapped, v, pickup, returnAt, places, days, priced, lines, promo, money } = await quoteEdit(db, b, input, settings, now);
+      const why = swapped ? `เปลี่ยนรถเป็น ${v.brand} ${v.model} ${days} วัน` : `แก้ไขการจอง ${days} วัน`;
+      await appendAdjustments(db, b.id, lines, money, why);
+      if (promo !== lines.promo) {
+        // the new car's promotion replaces the old one's
+        const { last } = await priceLines(db, b.id);
+        await db.query(
+          `INSERT INTO booking_items (booking_id, item_type, description, promotion_id, quantity, unit_amount_minor, amount_minor, sort_order)
+           VALUES ($1, 'DISCOUNT', $2, $3, 1, $4, $4, $5)`,
+          [b.id, `${why}: โปรโมชั่น`, priced.promotionId, lines.promo - promo, last + 1],
+        );
+      }
       const dueNow = b.status === "PENDING" ? Math.min(Number(settings["booking.reservation_fee_minor"]), money.total) : Number(b.amount_due_now_minor);
 
       const identityId = await writeIdentity(db, b.user_id, c, b.customer_identity_id);
@@ -1302,7 +1333,9 @@ export async function updateStaffBooking(staff, number, input, ctx) {
                 delivery_distance_m = $16, delivery_duration_s = $17, area_of_use = $18, stay_location = $19, social_url = $20,
                 rental_purpose = $21, contact_email = COALESCE($22, contact_email), return_type = $23, return_address = $24,
                 return_distance_m = $25, return_duration_s = $26,
-                return_reminded_at = CASE WHEN return_at = $6 THEN return_reminded_at END
+                return_reminded_at = CASE WHEN return_at = $6 THEN return_reminded_at END,
+                vehicle_id = $27, deposit_minor = $28, pickup_location_id = $29, return_location_id = $29,
+                promotion_id = CASE WHEN $30 THEN $31::uuid ELSE promotion_id END
           WHERE id = $1`,
         [
           b.id, identityId, input.fulfillment, places.deliveryAddress ? JSON.stringify(places.deliveryAddress) : null, pickup, returnAt,
@@ -1312,15 +1345,19 @@ export async function updateStaffBooking(staff, number, input, ctx) {
           input.areaOfUse ?? null, input.stayLocation ?? null, input.socialUrl ?? null, input.rentalPurpose ?? null,
           input.contactEmail ?? null, places.returnType, places.returnAddress ? JSON.stringify(places.returnAddress) : null,
           places.collect?.distanceMeters ?? null, places.collect?.durationSeconds ?? null,
+          v.id, money.deposit, swapped ? v.home_location_id : b.pickup_location_id, swapped, priced.promotionId,
         ],
       );
 
-      // The car hold follows the new dates; the EXCLUDE constraint rejects a clash → 409.
+      // The car hold follows the new dates (and car); the EXCLUDE constraint rejects a clash → 409.
       await db.query(
-        `UPDATE vehicle_availability_blocks SET during = tstzrange($2, $3::timestamptz + make_interval(mins => $4), '[)')
+        `UPDATE vehicle_availability_blocks SET vehicle_id = $5, during = tstzrange($2, $3::timestamptz + make_interval(mins => $4), '[)')
           WHERE booking_id = $1 AND block_type = 'BOOKING' AND released_at IS NULL`,
-        [b.id, pickup, returnAt, v.turnaround_minutes],
-      );
+        [b.id, pickup, returnAt, v.turnaround_minutes, v.id],
+      ).catch((err) => {
+        if (err.code === "23P01") throw Conflict("VEHICLE_UNAVAILABLE", "รถคันนี้มีคิวจองอื่นในช่วงวันที่เลือก เลือกคันอื่นหรือวันอื่น");
+        throw err;
+      });
 
       const { rows: u } = await db.query("SELECT email FROM users WHERE id = $1", [b.user_id]);
       await reissueContract(db, { bookingId: b.id, userId: b.user_id }, () =>
@@ -1336,15 +1373,123 @@ export async function updateStaffBooking(staff, number, input, ctx) {
           returnPlace: places.returnAddress,
         }),
       );
+      if (swapped) {
+        await notify(db, b.user_id, {
+          type: "BOOKING_CHANGED", bookingId: b.id,
+          title: "เปลี่ยนรถในการจองเรียบร้อย",
+          body: `${b.booking_number}: เปลี่ยนเป็น ${v.brand} ${v.model} ยอดรวมใหม่ ฿${(money.total / 100).toLocaleString("th-TH")}`,
+          data: { vehicle: v.slug, totalMinor: money.total },
+        });
+      }
       await recordAudit(db, ctx, {
-        action: "booking.edited_by_staff", entityType: "booking", entityId: b.id,
-        before: { pickupAt: b.pickup_at, returnAt: b.return_at, total: Number(b.total_minor), fulfillment: b.fulfillment_type },
-        after: { pickupAt: pickup, returnAt, total: money.total, fulfillment: input.fulfillment },
+        action: swapped ? "booking.vehicle_changed" : "booking.edited_by_staff", entityType: "booking", entityId: b.id,
+        before: { vehicle: b.vehicle_slug, pickupAt: b.pickup_at, returnAt: b.return_at, total: Number(b.total_minor), fulfillment: b.fulfillment_type },
+        after: { vehicle: v.slug, pickupAt: pickup, returnAt, total: money.total, fulfillment: input.fulfillment },
       });
     },
     { actorId: staff.user.id },
   );
   return getBooking(staff, number);
+}
+
+/** The edit form's data as a booking input (for "เปลี่ยนรถ" / "จองเพิ่ม", which only pick a car and dates). */
+async function inputFromBooking(staff, number, ctx, change) {
+  const f = await staffBookingForm(staff, number, ctx);
+  const place = (a) => a && Object.fromEntries(Object.entries({ address: a.address, placeId: a.placeId, lat: a.lat, lng: a.lng, notes: a.notes })
+    .filter(([, x]) => x != null));
+  return {
+    vehicleSlug: change.vehicleSlug ?? f.vehicleSlug,
+    pickupAt: change.pickupAt ?? new Date(f.pickupAt).toISOString(),
+    returnAt: change.returnAt ?? new Date(f.returnAt).toISOString(),
+    fulfillment: f.fulfillment,
+    delivery: f.fulfillment === "DELIVERY" ? place(f.delivery) : undefined,
+    returnType: f.returnType,
+    returnAddress: f.returnType === "ADDRESS" ? place(f.returnAddress) : undefined,
+    notes: f.notes ?? undefined, areaOfUse: f.areaOfUse ?? undefined, stayLocation: f.stayLocation ?? undefined,
+    socialUrl: f.socialUrl ?? undefined, rentalPurpose: f.rentalPurpose ?? undefined, contactEmail: f.contactEmail ?? undefined,
+    customer: f.customer,
+    declarations: { hasOriginalLicense: true, infoMatchesLicense: true },
+  };
+}
+
+/** Cars already held (booked, in the garage) at some point in the period, apart from this booking. */
+async function busySlugs(db, from, to, exceptBookingId) {
+  const { rows } = await db.query(
+    `SELECT DISTINCT v.slug FROM vehicle_availability_blocks k JOIN vehicles v ON v.id = k.vehicle_id
+      WHERE k.released_at IS NULL AND k.booking_id IS DISTINCT FROM $3
+        AND k.during && tstzrange($1, $2::timestamptz + make_interval(mins => v.turnaround_minutes), '[)')`,
+    [from, to, exceptBookingId],
+  );
+  return rows.map((r) => r.slug);
+}
+
+/**
+ * Preview for "เปลี่ยนรถ / เปลี่ยนวัน" (the booking now and after the change, and what that
+ * means for the rent already paid: collect more, or give some back) and for "จองเพิ่ม"
+ * (`addOn`: the price of the extra car on its own). Also which cars are taken in the period.
+ */
+export async function quoteChange(staff, number, { addOn = false, ...change }, ctx) {
+  const settings = await getSettings();
+  const b = await loadBooking(pool, number, staff);
+  assertStaffEditable(b);
+  const input = await inputFromBooking(staff, number, ctx, change);
+  if (addOn) {
+    const { pickupAt, returnAt } = checkPeriod(input, settings, new Date(), true);
+    const busy = await busySlugs(pool, pickupAt, returnAt, null);
+    const v = await findVehicleForBooking(pool, input.vehicleSlug);
+    if (!v) throw NotFound("Vehicle");
+    const places = await placeQuotes(input, v.slug);
+    const { days, money } = priceFor(v, input.customer, settings, pickupAt, returnAt, places);
+    return {
+      busy, available: !busy.includes(v.slug),
+      after: { vehicle: `${v.brand} ${v.model}`, plate: v.license_plate ?? null, days, dailyMinor: Number(v.daily_rate_minor),
+        rentalMinor: money.rental - money.discount, tripMinor: money.delivery + money.returnPickup, totalMinor: money.total, depositMinor: money.deposit },
+    };
+  }
+  const q = await quoteEdit(pool, b, input, settings, new Date());
+  const busy = await busySlugs(pool, q.pickup, q.returnAt, b.id);
+  const paid = Number(b.rent_paid_minor ?? 0);
+  const totalBefore = Number(b.total_minor);
+  return {
+    busy, available: !busy.includes(q.v.slug),
+    before: { vehicle: `${b.brand} ${b.model}`, plate: b.license_plate, days: Number(b.rental_days), totalMinor: totalBefore, depositMinor: Number(b.deposit_minor) },
+    after: { vehicle: `${q.v.brand} ${q.v.model}`, plate: q.v.license_plate ?? null, days: q.days, dailyMinor: Number(q.v.daily_rate_minor),
+      totalMinor: q.money.total, depositMinor: q.money.deposit },
+    swapped: q.swapped,
+    differenceMinor: q.money.total - totalBefore,
+    depositDifferenceMinor: q.money.deposit - Number(b.deposit_minor),
+    paidMinor: paid,
+    leftToCollectMinor: Math.max(0, q.money.total - paid),
+    refundMinor: Math.max(0, paid - q.money.total),
+  };
+}
+
+/** "เปลี่ยนรถ / เปลี่ยนวัน": same booking, another car and / or dates; payments stay on it. */
+export async function changeBooking(staff, number, change, ctx) {
+  const input = await inputFromBooking(staff, number, ctx, change);
+  return updateStaffBooking(staff, number, input, ctx);
+}
+
+/**
+ * "จองเพิ่ม": another car for the same customer, as its own booking tied to this one's bill.
+ * The renter's details and documents carry over; no reservation fee is asked (staff confirm
+ * it at once), the rent is collected at hand-over like the rest of the bill.
+ */
+export async function addOnBooking(staff, number, change, ctx) {
+  const parent = await loadBooking(pool, number, staff);
+  assertStaffEditable(parent);
+  const input = await inputFromBooking(staff, number, ctx, change);
+  const { rows } = await pool.query("SELECT id, email, full_name FROM users WHERE id = $1", [parent.user_id]);
+  const asCustomer = { user: rows[0], roles: [], permissions: new Set() };
+  const created = await createBooking(asCustomer, input, ctx, { staff });
+  await pool.query("UPDATE bookings SET bill_booking_id = $2 WHERE booking_number = $1", [created.number, parent.bill_booking_id ?? parent.id]);
+  try {
+    return { booking: await confirmOffline(staff, created.number, { paidMinor: 0, method: "cash", note: `จองเพิ่มจาก ${number}` }, ctx), confirmed: true };
+  } catch (err) {
+    // documents missing on the account: the new booking waits in "ยังกรอกไม่เสร็จ"
+    if (err.code === "DOCUMENTS_REQUIRED") return { booking: await getBooking(staff, created.number), confirmed: false };
+    throw err;
+  }
 }
 
 /**

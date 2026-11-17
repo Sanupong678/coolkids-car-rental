@@ -64,7 +64,13 @@ const LIST_SELECT = `
                           ORDER BY e.round) FROM booking_extensions e WHERE e.booking_id = b.id) AS extensions,
          (SELECT count(*) FROM bookings pb WHERE pb.user_id = b.user_id AND pb.status = 'COMPLETED' AND pb.id <> b.id)::int AS customer_trips,
          -- the booking's account can get LINE messages (signed in with LINE, or took a "follow in LINE" link)
-         EXISTS (SELECT 1 FROM user_identities i WHERE i.user_id = b.user_id AND i.provider = 'line') AS customer_on_line
+         EXISTS (SELECT 1 FROM user_identities i WHERE i.user_id = b.user_id AND i.provider = 'line') AS customer_on_line,
+         -- "จองเพิ่ม": bookings on one bill (the first booking and the cars added to it)
+         (SELECT json_build_object('numbers', json_agg(x.booking_number ORDER BY x.created_at), 'totalMinor', sum(x.total_minor))
+            FROM bookings x
+           WHERE x.deleted_at IS NULL AND x.status NOT IN ('CANCELLED','EXPIRED','REFUNDED')
+             AND COALESCE(x.bill_booking_id, x.id) = COALESCE(b.bill_booking_id, b.id)
+          HAVING count(*) > 1) AS bill
     FROM bookings b
     JOIN vehicles v ON v.id = b.vehicle_id
     LEFT JOIN LATERAL (
@@ -101,6 +107,9 @@ export async function board(date) {
         depositCollectedMinor: Number(r.deposit_collected_minor), depositReturnedAt: r.deposit_returned_at,
         depositDeductionMinor: r.deposit_deduction_minor == null ? null : Number(r.deposit_deduction_minor),
         // still to collect at hand-over: rent balance + deposit
+        // rent paid beyond the total (e.g. after a change to a cheaper car): give back to the customer
+        overpaidMinor: Math.max(0, Number(r.paid_online_minor) + Number(r.paid_counter_minor) - Number(r.total_minor)),
+        bill: r.bill ? { numbers: r.bill.numbers, totalMinor: Number(r.bill.totalMinor) } : null,
         dueMinor: Math.max(0, Number(r.total_minor) - Number(r.paid_online_minor) - Number(r.paid_counter_minor))
           + (Number(r.deposit_collected_minor) ? 0 : Number(r.deposit_minor)),
       },

@@ -94,6 +94,14 @@ export const extendSchema = z.object({
   rentalMinor: amount,
 });
 
+// "เปลี่ยนรถ / เปลี่ยนวัน" and "จองเพิ่ม": a car and dates; anything left out stays as the booking has it
+export const bookingChangeSchema = z.object({
+  vehicleSlug: z.string().regex(/^[a-z0-9-]+$/).max(120).optional(),
+  pickupAt: z.iso.datetime({ offset: true }).optional(),
+  returnAt: z.iso.datetime({ offset: true }).optional(),
+  addOn: z.boolean().optional(), // quote only: price "จองเพิ่ม" instead of a change
+});
+
 // ?round= on the contract PDF: one rental round's agreement
 export const roundQuery = z.object({ round: z.coerce.number().int().min(1).max(99).optional() }).passthrough();
 

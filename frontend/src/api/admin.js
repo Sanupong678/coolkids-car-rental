@@ -94,6 +94,10 @@ export const updateBooking = (number, body) => api(`/admin/bookings/${number}`, 
 export const adjustPrice = (number, body) => postJson(`/admin/bookings/${number}/price`, body)
 /** "ใช้งานต่อ": { returnAt, rentalMinor } → booking runs on, new contract round */
 export const extendBooking = (number, body) => postJson(`/admin/bookings/${number}/extend`, body)
+/** "เปลี่ยนรถ / เปลี่ยนวัน" and "จองเพิ่ม": { vehicleSlug?, pickupAt?, returnAt? }; quote first (addOn: true prices an extra car) */
+export const quoteBookingChange = (number, body) => postJson(`/admin/bookings/${number}/change/quote`, body)
+export const changeBooking = (number, body) => postJson(`/admin/bookings/${number}/change`, body)
+export const addOnBooking = (number, body) => postJson(`/admin/bookings/${number}/add-on`, body)
 
 // Address book ("สมุดรายชื่อ"): everyone who has booked; detail has the saved details for the booking form.
 export const listCustomers = () => api('/admin/customers').then((r) => r.data)

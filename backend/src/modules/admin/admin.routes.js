@@ -22,7 +22,7 @@ import * as customers from "./customers.service.js";
 import * as staffEmail from "../notifications/staff-recipients.js";
 import * as documents from "../bookings/documents.service.js";
 import * as bookings from "../bookings/bookings.service.js";
-import { createBookingSchema, customerFields, extendSchema, numberParam, offlineConfirmSchema, priceAdjustSchema, staffBookingSchema } from "../bookings/bookings.schemas.js";
+import { bookingChangeSchema, createBookingSchema, customerFields, extendSchema, numberParam, offlineConfirmSchema, priceAdjustSchema, staffBookingSchema } from "../bookings/bookings.schemas.js";
 import { PAGE_KEYS } from "../rbac/pages.js";
 import * as vehicles from "./vehicles.service.js";
 
@@ -300,6 +300,32 @@ export function adminRoutes() {
     validate({ params: numberParam, body: priceAdjustSchema }),
     async (req, res) => {
       res.json({ data: await bookings.adjustBookingPrice(req.auth, req.valid.params.number, req.valid.body, auditContext(req)) });
+    },
+  );
+  // "เปลี่ยนรถ / เปลี่ยนวัน": preview the money, then apply (same booking number)
+  router.post(
+    "/bookings/:number/change/quote",
+    requirePermission(P.BOOKINGS_WRITE, P.USERS_READ_SENSITIVE),
+    validate({ params: numberParam, body: bookingChangeSchema }),
+    async (req, res) => {
+      res.json({ data: await bookings.quoteChange(req.auth, req.valid.params.number, req.valid.body, auditContext(req)) });
+    },
+  );
+  router.post(
+    "/bookings/:number/change",
+    requirePermission(P.BOOKINGS_WRITE, P.USERS_READ_SENSITIVE),
+    validate({ params: numberParam, body: bookingChangeSchema }),
+    async (req, res) => {
+      res.json({ data: await bookings.changeBooking(req.auth, req.valid.params.number, req.valid.body, auditContext(req)) });
+    },
+  );
+  // "จองเพิ่ม": another car on the same bill (own booking number, confirmed at once)
+  router.post(
+    "/bookings/:number/add-on",
+    requirePermission(P.BOOKINGS_WRITE, P.USERS_READ_SENSITIVE),
+    validate({ params: numberParam, body: bookingChangeSchema.required({ vehicleSlug: true, pickupAt: true, returnAt: true }) }),
+    async (req, res) => {
+      res.status(201).json({ data: await bookings.addOnBooking(req.auth, req.valid.params.number, req.valid.body, auditContext(req)) });
     },
   );
   router.post(

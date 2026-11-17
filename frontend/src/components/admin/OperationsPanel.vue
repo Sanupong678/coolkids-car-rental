@@ -10,6 +10,7 @@ import MileageDialog from '@/components/admin/ops/MileageDialog.vue'
 import BookingOverview from '@/components/admin/ops/BookingOverview.vue'
 import PaymentDialog from '@/components/admin/ops/PaymentDialog.vue'
 import ExtendDialog from '@/components/admin/ops/ExtendDialog.vue'
+import ChangeDialog from '@/components/admin/ops/ChangeDialog.vue'
 import LineClaimLink from '@/components/admin/LineClaimLink.vue'
 import BookingModal from '@/components/booking/BookingModal.vue'
 import { getVehicle } from '@/api/catalogue'
@@ -230,6 +231,9 @@ const onlineBalance = (b) =>
             <span v-if="b.ops?.extensions?.length" class="badge ext" :title="b.ops.extensions.map((e) => `รอบ ${e.round}: ${dt(e.from)} – ${dt(e.to)}`).join(' · ')">
               <Icon name="calendar" :size="12" /> ลูกค้าใช้ต่อ · รอบ {{ b.ops.extensions.length + 1 }}
             </span>
+            <span v-if="b.ops?.bill" class="badge bill" :title="`บิลเดียวกัน: ${b.ops.bill.numbers.join(', ')}`">
+              <Icon name="receipt" :size="12" /> บิลรวม {{ b.ops.bill.numbers.length }} คัน · {{ money(b.ops.bill.totalMinor, b.money.currency) }}
+            </span>
             <span v-if="b.bookedByStaff" class="badge staff" title="แอดมินกรอกการจองนี้แทนลูกค้า"><Icon name="user" :size="12" /> แอดมินจองให้</span>
             <span v-if="b.ops?.customerOnLine" class="badge line" title="ลูกค้าได้รับแจ้งสถานะทาง LINE"><Icon name="check" :size="12" /> ลูกค้าติดตามใน LINE</span>
             <span v-else-if="b.ops?.claimedAt" class="badge warn" title="ลูกค้าเปิดลิงก์นอกแอป LINE: การจองเป็นของลูกค้าแล้ว แต่แจ้งเตือนทาง LINE ไม่ได้">ลูกค้ารับการจองแล้ว (ไม่ใช่ LINE)</span>
@@ -270,6 +274,7 @@ const onlineBalance = (b) =>
             <span v-if="feePaid(b)" class="paid"><small>เงินจอง:</small> <b>−{{ money(feePaid(b), b.money.currency) }}</b> <Icon name="check" :size="12" /></span>
             <span v-if="onlineBalance(b)" class="paid"><small>จ่ายออนไลน์ (Stripe):</small> <b>−{{ money(onlineBalance(b), b.money.currency) }}</b> <Icon name="check" :size="12" /></span>
             <span v-if="b.ops?.paidCounterMinor" class="paid"><small>รับหน้าร้าน:</small> <b>−{{ money(b.ops.paidCounterMinor + b.ops.depositCollectedMinor, b.money.currency) }}</b></span>
+            <span v-if="b.ops?.overpaidMinor" class="refund"><small>ต้องคืนลูกค้า:</small> <b>{{ money(b.ops.overpaidMinor, b.money.currency) }}</b></span>
             <span class="due"><small>เรียกเก็บ:</small> <b>{{ money(b.ops?.dueMinor ?? 0, b.money.currency) }}</b></span>
             <span v-if="b.balance?.payment?.status === 'SUCCEEDED'" class="badge ok"><Icon name="check" :size="12" /> ลูกค้าจ่ายครบแล้ว (Stripe)</span>
             <span v-else-if="b.ops?.paidCounterMinor || b.ops?.depositCollectedMinor" class="badge"><Icon name="shield" :size="12" /> รับเงินค่าเช่าและมัดจำแล้ว</span>
@@ -293,6 +298,12 @@ const onlineBalance = (b) =>
           </button>
           <button v-if="b.status === 'ACTIVE'" type="button" class="go extend" :disabled="busyId === b.id" @click="open('extend', b)">
             <Icon name="calendar" :size="14" /> ใช้งานต่อ
+          </button>
+          <button v-if="EDITABLE.includes(b.status) && !unfinished(b)" type="button" class="go change" :disabled="busyId === b.id" title="เปลี่ยนรถหรือวัน ในการจองเดิม: คิดส่วนต่างให้" @click="open('change', b)">
+            <Icon name="car" :size="14" /> เปลี่ยนรถ / วัน
+          </button>
+          <button v-if="EDITABLE.includes(b.status) && !unfinished(b)" type="button" class="go change" :disabled="busyId === b.id" title="ลูกค้าเช่าเพิ่ม: คันเดิมเพิ่มวัน หรืออีกคันในบิลเดียวกัน" @click="open('addon', b)">
+            <Icon name="calendar" :size="14" /> จองเพิ่ม
           </button>
           <button v-if="EDITABLE.includes(b.status) && !unfinished(b)" type="button" class="ghost" :disabled="busyId === b.id" @click="openEdit(b)">
             <Icon name="receipt" :size="14" /> แก้ไขรายละเอียด
@@ -333,6 +344,7 @@ const onlineBalance = (b) =>
 
     <PaymentDialog v-if="['pay', 'qr', 'ledger'].includes(tool?.kind)" :booking="tool.booking" :mode="{ pay: 'collect', qr: 'qr', ledger: 'ledger' }[tool.kind]" @close="onToolClose" />
     <ExtendDialog v-if="tool?.kind === 'extend'" :booking="tool.booking" @close="onToolClose" />
+    <ChangeDialog v-if="['change', 'addon'].includes(tool?.kind)" :booking="tool.booking" :mode="tool.kind" @close="onToolClose" @extend="tool = { kind: 'extend', booking: tool.booking }" />
     <MileageDialog v-if="tool?.kind === 'mileage'" :booking="tool.booking" @close="onToolClose" />
     <DocumentsDialog v-if="tool?.kind === 'contract'" :booking="tool.booking" @close="onToolClose" />
     <BookingOverview v-if="overview" :key="overview.id" :booking="overview" @close="overview = null" @open="openNumber" />
@@ -370,6 +382,17 @@ const onlineBalance = (b) =>
 }
 .act .go.extend {
   background: #1f9d57;
+}
+/* "เปลี่ยนรถ / วัน" and "จองเพิ่ม" */
+.act .go.change {
+  background: #2f5fb3;
+}
+.badge.bill {
+  border-color: rgb(255 210 120 / 0.55);
+  color: #ffd98a;
+}
+.refund b {
+  color: #ff8a80;
 }
 /* car back, job closed: faded grey until pointed at */
 .job.finished {
