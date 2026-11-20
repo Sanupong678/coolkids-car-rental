@@ -1750,7 +1750,9 @@ export async function verifyCheckout(auth, number, sessionId) {
 
 export async function mockPaymentInfo(auth, paymentId) {
   const { rows } = await pool.query(
-    `SELECT p.id, p.status, p.amount_minor, p.currency, p.provider, b.booking_number, b.user_id, v.brand, v.model
+    // A balance checkout charges the rent row plus its deposit row together, as Stripe does.
+    `SELECT p.id, p.status, p.amount_minor + COALESCE((SELECT sum(c.amount_minor) FROM payments c WHERE c.parent_payment_id = p.id), 0)::int AS amount_minor,
+            p.currency, p.provider, b.booking_number, b.user_id, v.brand, v.model
        FROM payments p JOIN bookings b ON b.id = p.booking_id JOIN vehicles v ON v.id = b.vehicle_id WHERE p.id = $1`,
     [paymentId],
   );

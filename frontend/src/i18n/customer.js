@@ -105,6 +105,8 @@ const S = {
     sumRentTotal: ['รวมค่าเช่า', 'Rental total', '租车费用合计'],
     sumDeposit: ['เงินมัดจำ (ได้คืนเมื่อคืนรถ)', 'Security deposit (refunded on return)', '押金（还车后退还）'],
     sumGrand: ['รวมทั้งหมด', 'Grand total', '总计'],
+    whenRent: ['หักค่าจอง {fee} แล้ว ที่เหลือจ่ายวันรับรถ', 'Less the {fee} reservation fee, the rest paid at pick-up', '扣除订金 {fee}，余款取车时支付'],
+    whenDeposit: ['จ่ายวันรับรถ', 'Paid at pick-up', '取车时支付'],
     sumNow: ['ชำระตอนนี้ (ค่าจอง)', 'Pay now (reservation fee)', '现在支付（订金）'],
     sumDepositHint: ['ค่าจองหักจากยอดรวม ส่วนที่เหลือและเงินมัดจำชำระตอนรับรถ', 'The reservation fee comes off the total; the rest and the deposit are paid at pick-up.', '订金从总额中扣除，余款和押金在取车时支付。'],
     sumBack: ['สรุปราคา', 'Price summary', '价格明细'],

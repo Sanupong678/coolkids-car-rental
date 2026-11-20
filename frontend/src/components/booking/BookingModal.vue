@@ -724,8 +724,8 @@ const HEADS = { 1: ['car', props.editNumber ? 'bk.headEdit' : 'bk.head1'], 2: ['
               <tr v-if="br.promoDiscountMinor" class="minus"><th>{{ t('bk.sumPromo') }}</th><td>−{{ money(br.promoDiscountMinor, booking.money.currency) }}</td></tr>
               <tr v-if="br.staffDiscountMinor" class="minus"><th>{{ t('bk.sumStaffDiscount') }}</th><td>−{{ money(br.staffDiscountMinor, booking.money.currency) }}</td></tr>
               <tr v-if="br.taxMinor"><th>VAT</th><td>{{ money(br.taxMinor, booking.money.currency) }}</td></tr>
-              <tr class="sub"><th>{{ t('bk.sumRentTotal') }}</th><td>{{ money(booking.money.totalMinor, booking.money.currency) }}</td></tr>
-              <tr><th>{{ t('bk.sumDeposit') }}</th><td>{{ money(booking.money.depositMinor, booking.money.currency) }}</td></tr>
+              <tr class="sub"><th>{{ t('bk.sumRentTotal') }}<small v-if="booking.status === 'PENDING'" class="when">{{ t('bk.whenRent', { fee: money(booking.money.dueNowMinor, booking.money.currency) }) }}</small></th><td>{{ money(booking.money.totalMinor, booking.money.currency) }}</td></tr>
+              <tr><th>{{ t('bk.sumDeposit') }}<small v-if="booking.status === 'PENDING'" class="when">{{ t('bk.whenDeposit') }}</small></th><td>{{ money(booking.money.depositMinor, booking.money.currency) }}</td></tr>
               <tr class="grand"><th>{{ t('bk.sumGrand') }}</th><td>{{ money(booking.money.totalMinor + booking.money.depositMinor, booking.money.currency) }}</td></tr>
               <tr v-if="booking.status === 'PENDING'" class="now"><th>{{ t('bk.sumNow') }}</th><td>{{ money(booking.money.dueNowMinor, booking.money.currency) }}</td></tr>
             </tbody>
@@ -1225,6 +1225,13 @@ h3 i,
   margin-top: 2px;
   accent-color: var(--accent);
   flex: none;
+}
+.when {
+  display: block;
+  margin-top: 2px;
+  color: #9a6b12;
+  font-size: 0.75rem;
+  font-weight: 500;
 }
 .hint {
   font-size: 0.75rem;

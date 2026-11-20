@@ -141,6 +141,8 @@ async function payBalance() {
     balanceBusy.value = false
   }
 }
+// Rent and deposit are settled at pick-up unless paid ahead online; the lines say so until then.
+const atPickup = computed(() => ['PENDING', 'CONFIRMED', 'PREPARING', 'READY', 'IN_DELIVERY'].includes(b.value?.status) && b.value.money.payAtPickupMinor > 0)
 const canResume = computed(() => b.value?.status === 'PENDING' && (!review.value || ['DRAFT', 'CHANGES_REQUESTED'].includes(review.value)))
 const until = (iso) => fmtDate(iso, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
 const headline = computed(() => {
@@ -332,8 +334,8 @@ async function copySummary() {
           <h2>{{ t('st.payment') }}</h2>
           <table>
             <!-- what each line comes to (staff changes included), not the raw ledger rows -->
-            <tr v-for="[label, amount] in priceRows" :key="label"><th>{{ label }}</th><td>{{ money(amount, b.money.currency) }}</td></tr>
-            <tr><th>{{ t('st.deposit') }}</th><td>{{ money(b.money.depositMinor, b.money.currency) }}</td></tr>
+            <tr v-for="([label, amount], i) in priceRows" :key="label"><th>{{ label }}<small v-if="i === 0 && atPickup" class="when">{{ t('bk.whenRent', { fee: money(paid ? b.payment.amountMinor : b.money.dueNowMinor, b.money.currency) }) }}</small></th><td>{{ money(amount, b.money.currency) }}</td></tr>
+            <tr><th>{{ t('st.deposit') }}<small v-if="atPickup" class="when">{{ t('bk.whenDeposit') }}</small></th><td>{{ money(b.money.depositMinor, b.money.currency) }}</td></tr>
             <tr class="total"><th>{{ t(paid ? 'st.feePaid' : 'st.feeDue') }}</th><td>{{ money(paid ? b.payment.amountMinor : b.money.dueNowMinor, b.money.currency) }}</td></tr>
             <tr class="muted"><th>{{ t('st.atPickup') }}</th><td>{{ money(b.money.payAtPickupMinor, b.money.currency) }}</td></tr>
           </table>
@@ -709,6 +711,13 @@ th {
   font-weight: 400;
   padding: 7px 0;
   border-bottom: 1px solid var(--border);
+}
+.when {
+  display: block;
+  margin-top: 2px;
+  color: #9a6b12;
+  font-size: 0.75rem;
+  font-weight: 500;
 }
 td {
   text-align: right;
