@@ -315,12 +315,7 @@ const S = {
     feePaid: ['ชำระค่าจองแล้ว', 'Reservation fee paid', '已付订金'],
     feeDue: ['ค่าจอง (โอน = จอง)', 'Reservation fee (paid = booked)', '订金（付款即预订成功）'],
     atPickup: ['ชำระวันรับรถ', 'Pay at pick-up', '取车时支付'],
-    payBalance: ['ชำระค่าเช่าและเงินประกัน {amount}', 'Pay rent and deposit {amount}', '支付租金和押金 {amount}'],
-    payBalanceHint: [
-      'จ่ายล่วงหน้าด้วยบัตรหรือพร้อมเพย์ผ่าน Stripe วันรับรถไม่ต้องจ่ายเพิ่ม (หรือจะจ่ายวันรับรถก็ได้)',
-      'Pay ahead by card or PromptPay via Stripe, nothing more to pay at pick-up (or pay on the day)',
-      '可通过 Stripe 用银行卡或 PromptPay 提前支付，取车时无需再付（也可取车时支付）',
-    ],
+    payAtHandover: ['ค่าเช่าและเงินประกันชำระตอนรับรถ พนักงานจะเปิด QR ให้สแกนจ่ายตอนส่งมอบรถ', 'Rent and the deposit are paid at pick-up: staff show you a QR code to scan when they hand over the car.', '租金和押金在取车时支付：交车时工作人员会出示二维码供您扫码付款。'],
     balancePaid: ['ชำระค่าเช่าและเงินประกันแล้ว {time} · วันรับรถไม่ต้องจ่ายเพิ่ม', 'Rent and deposit paid {time} · nothing more at pick-up', '租金和押金已付 {time} · 取车时无需再付'],
     balanceChecking: ['กำลังยืนยันการชำระเงิน…', 'Confirming your payment…', '正在确认付款…'],
     paidAt: ['ชำระเมื่อ {time}', 'Paid {time}', '付款时间 {time}'],
